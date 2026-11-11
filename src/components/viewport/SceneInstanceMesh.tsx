@@ -64,13 +64,17 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
     proxyObj.updateMatrixWorld();
   }, [proxyObj, instance.transform]);
 
-  // Selection wireframe box dimensions
+  // Clean 12-edge CAD selection box (no diagonal triangle wireframe lines)
   const selectionBox = useMemo(() => {
     const [sx, sy, sz] = component.boundingBox.size;
     const [minX, minY, minZ] = component.boundingBox.min;
     const [maxX, maxY, maxZ] = component.boundingBox.max;
+    const boxGeom = new THREE.BoxGeometry(sx + 0.04, sy + 0.04, sz + 0.04);
+    const edgesGeometry = new THREE.EdgesGeometry(boxGeom);
+    boxGeom.dispose();
+
     return {
-      size: [sx + 0.04, sy + 0.04, sz + 0.04] as [number, number, number],
+      edgesGeometry,
       center: [
         (minX + maxX) * 0.5,
         (minY + maxY) * 0.5,
@@ -78,6 +82,12 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
       ] as [number, number, number],
     };
   }, [component.boundingBox]);
+
+  useEffect(() => {
+    return () => {
+      selectionBox.edgesGeometry.dispose();
+    };
+  }, [selectionBox]);
 
   const handleSelectClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
@@ -197,23 +207,28 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
         {clonedModel ? (
           <primitive object={clonedModel} />
         ) : (
-          <mesh position={selectionBox.center}>
-            <boxGeometry args={selectionBox.size} />
-            <meshStandardMaterial color="#1e293b" wireframe />
-          </mesh>
+          <lineSegments
+            position={selectionBox.center}
+            geometry={selectionBox.edgesGeometry}
+          >
+            <lineBasicMaterial color="#334155" />
+          </lineSegments>
         )}
 
-        {/* CAD Selection Bounding Highlight */}
+        {/* CAD Selection Bounding Box (12 outer edges only, no diagonal lines) */}
         {isSelected && (
-          <mesh position={selectionBox.center}>
-            <boxGeometry args={selectionBox.size} />
-            <meshBasicMaterial
+          <lineSegments
+            position={selectionBox.center}
+            geometry={selectionBox.edgesGeometry}
+            raycast={() => null}
+          >
+            <lineBasicMaterial
               color={instance.locked ? '#f59e0b' : '#22d3ee'}
-              wireframe
               transparent
-              opacity={0.55}
+              opacity={0.8}
+              toneMapped={false}
             />
-          </mesh>
+          </lineSegments>
         )}
       </group>
     </>
