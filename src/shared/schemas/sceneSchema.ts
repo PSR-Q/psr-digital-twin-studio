@@ -19,6 +19,8 @@ export interface SceneMetadata {
 export interface SceneEnvironmentConfig {
   showGrid: boolean;
   showSnapPorts: boolean;
+  /** Show 3D Spline Paths, Sensor Laser Beams, and Flow Portals */
+  showTransportPaths?: boolean;
   snapEnabled: boolean;
   /** Magnetic port capture radius in meters */
   snapRadiusMeters: number;
@@ -75,11 +77,12 @@ export function createEmptySceneSchema(
       createdAt: now,
       updatedAt: now,
       units: 'meters',
-      editorVersion: '1.0.0-m1',
+      editorVersion: '1.0.0-m3',
     },
     environment: {
       showGrid: true,
       showSnapPorts: true,
+      showTransportPaths: true,
       snapEnabled: true,
       snapRadiusMeters: 0.45,
       autoAlignPortRotation: true,

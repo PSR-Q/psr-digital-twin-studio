@@ -90,7 +90,10 @@ class RuntimeBusClient {
         Boolean(binding.manualForceValue)
       );
       if (!binding.manualForceEnabled) {
-        this.bufferView.writePlcToSimBool(binding.bufferSlotIndex, false);
+        this.bufferView.writePlcToSimBool(
+          binding.bufferSlotIndex,
+          Boolean(binding.manualForceValue)
+        );
       }
       return;
     }

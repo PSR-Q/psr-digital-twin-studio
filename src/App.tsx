@@ -69,7 +69,9 @@ export function App() {
           }
           break;
         case 'escape':
-          if (store.selectedSubMeshName) {
+          if (store.isDrawingSplinePath) {
+            store.setIsDrawingSplinePath(false);
+          } else if (store.selectedSubMeshName) {
             store.selectSubMesh(null);
           } else {
             store.selectInstance(null);

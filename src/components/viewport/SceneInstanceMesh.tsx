@@ -265,6 +265,17 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
     if (isDraggingRef.current || e.delta > 5) return;
 
     const store = useEditorStore.getState();
+
+    // Milestone 3: Interactive 3D Spline Waypoint placement directly on conveyor mesh surface
+    if (store.isDrawingSplinePath && isSelected) {
+      store.appendSplineWaypointWorld(instance.id, [
+        e.point.x,
+        e.point.y,
+        e.point.z,
+      ]);
+      return;
+    }
+
     const pickedSubMesh = resolveClickedSubMeshName(e.object);
 
     if (!isSelected) {
@@ -381,6 +392,10 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
     setGizmoDragging(false);
   };
 
+  const isDrawingSplinePath = useEditorStore(
+    (s) => isSelected && s.isDrawingSplinePath
+  );
+
   if (!instance.visible) return null;
 
   const [rx, ry, rz] = instance.transform.rotationDeg;
@@ -390,7 +405,7 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
       {/* Decoupled invisible Gizmo proxy so magnetic snapping never locks/fights mouse movement */}
       <group ref={setProxyObj} />
 
-      {isSelected && !instance.locked && proxyObj && (
+      {isSelected && !instance.locked && !isDrawingSplinePath && proxyObj && (
         <TransformControls
           object={proxyObj}
           mode={gizmoMode}

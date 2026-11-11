@@ -39,6 +39,8 @@ export interface PathSensorBinding {
   pathNodeId: UUID;
   /** Distance from path start in millimeters (s_sensor) */
   offsetMm: number;
+  /** Optional sensing half-window / radius in millimeters */
+  detectionRadiusMm?: number;
   sensorType: 'photoelectric' | 'proximity';
   outputBoolSlot: number;
 }
@@ -49,7 +51,9 @@ export interface PartSourceRuntimeConfig {
   targetPathNodeId: UUID;
   mode: 'interval' | 'plc-trigger';
   intervalSec: number;
+  maxActiveItems?: number;
   triggerBoolSlot?: number;
+  spawnedCountDintSlot?: number;
   partDimensionsMm: Vector3Tuple;
   partColorHex: string;
 }

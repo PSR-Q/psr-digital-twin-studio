@@ -52,14 +52,14 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.2.0-milestone2
-          name: "Milestone 2 — Component Builder (Linear/Rotary FK) & Signal Force Console (.exe)"
+          tag_name: v0.3.0-milestone3
+          name: "Milestone 3 — Spline Conveyors, Zero-Jitter Stopper Queue, Path Sensors & HSC Encoder (.exe)"
           body: |
-            ### Milestone 2 Deliverable — Standalone Windows `.exe`
-            - **Zero-install Portable Executable:** Download the `.exe` below and double-click to launch on Windows 10/11 (x64).
-            - **Included Features (Milestones 1 + 2):**
-              1. Unified `.glb` / `.gltf` & **OpenUSD (`.usd`, `.usda`, `.usdc`, `.usdz`)** 3D importer + magnetic `SnapPort` docking + Scene `.json` Save/Load
-              2. **Interactive 3D Component Builder:** Click or double-click any 3D sub-mesh to assign `LinearAxis`, `RotaryAxis`, or `VisualEffect`, configure stroke/angle limits, parent-axis chaining, and live Jog testing
-              3. **60–144Hz Zero-Re-Render Forward Kinematics Engine:** Pneumatic cylinders with automatic `DI_ReedRetracted` / `DI_ReedExtended` limits, Trapezoidal Servo positioning (`DI_InPosition`), Continuous RPM rotary motors, Bounded indexing tables, and procedural conveyor belt UV-scrolling
-              4. **Signal Force Console (`Force I/O`):** Latching Force ON/OFF switches, momentary `JOG` pushbuttons, analog setpoint sliders, and live 10Hz `SIM_TO_PLC` sensor LEDs without requiring an external PLC
+            ### Milestone 3 Deliverable — Standalone Windows `.exe` (`v0.3.0`)
+            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.3.0-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
+            - **Included Features (Milestones 1 + 2 + 3):**
+              1. **3D Layout & CAD Importer:** `.glb` / `.gltf` & **OpenUSD (`.usd`, `.usda`, `.usdc`, `.usdz`)** importer + Magnetic `SnapPort` docking + `.json` layout Save/Load
+              2. **Component Builder & Signal Force Console:** Sub-mesh `LinearAxis` / `RotaryAxis` / `VisualEffect` (RPM belt drive) + 60–144Hz zero-re-render FK engine + standalone `Force I/O` console
+              3. **Directed Spline Conveyor Graph & Interactive 3D Path Drawing:** Draw Catmull-Rom / Polyline waypoints directly on 3D belts, auto-route across docked conveyors & rotating 90° Turntables, and spawn/accumulate 3D workpieces behind Pneumatic Stoppers with zero micro-jitter
+              4. **Deterministic Sub-Frame Path Sensors & Virtual HSC Encoders:** Live 3D `Photoelectric` laser beam & `Proximity` sensors (`BOOL`) + cumulative 32-bit `Encoder Pulse (DINT)` and `Servo Position / Velocity (REAL)` registers
           files: release/*.exe

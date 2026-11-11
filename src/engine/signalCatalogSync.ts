@@ -7,18 +7,48 @@ import type {
   PlcTagMap,
   SceneNodeInstance,
   SubMeshRoleAssignment,
+  TransportGraph,
+  UUID,
 } from '../shared/schemas';
 
 /**
- * Automatic Industrial I/O Signal Synthesizer & Binary Buffer Slot Allocator (Milestone 2)
+ * Automatic Industrial I/O Signal Synthesizer & Binary Buffer Slot Allocator (Milestones 2 & 3)
  *
  * Synthesizes PLC_TO_SIM command signals and SIM_TO_PLC feedback signals (Reed Switches,
- * Servo Actual Position, Speed RPM) directly from Component Builder sub-mesh roles,
+ * Path Sensors, Part Spawner/Sink Counters, Virtual HSC Encoder DINT32 Pulses, and Servo REAL Position)
  * and maps every placed 3D machine instance into collision-free BinaryIpcBufferView slots.
  */
 
 export function makeNodeSignalKey(nodeName: string, suffix: string): string {
   return `${nodeName}::${suffix}`;
+}
+
+export function makeSensorSignalKey(sensorId: UUID): string {
+  return `SENSOR::${sensorId}::DI_Triggered`;
+}
+
+export function makeSpawnerTriggerKey(spawnerId: UUID): string {
+  return `FLOW::${spawnerId}::DO_SpawnTrigger`;
+}
+
+export function makeSpawnerCountKey(spawnerId: UUID): string {
+  return `FLOW::${spawnerId}::AI_SpawnedCount`;
+}
+
+export function makeSinkCountKey(sinkId: UUID): string {
+  return `FLOW::${sinkId}::AI_SinkCount`;
+}
+
+export function makeEncoderPulsesKey(encoderId: UUID): string {
+  return `ENC::${encoderId}::DI_Pulses`;
+}
+
+export function makeEncoderPosKey(encoderId: UUID): string {
+  return `ENC::${encoderId}::AI_ServoPos`;
+}
+
+export function makeEncoderVelKey(encoderId: UUID): string {
+  return `ENC::${encoderId}::AI_ServoVel`;
 }
 
 export function formatReadableNodeLabel(nodeName: string): string {
@@ -230,6 +260,7 @@ export function synthesizeComponentSignals(
             direction: 'PLC_TO_SIM',
             dataType: 'BOOL',
             nodeName,
+            defaultBool: true,
           },
           {
             key: makeNodeSignalKey(nodeName, 'AO_BeltSpeedRpm'),
@@ -279,6 +310,107 @@ export function synthesizeComponentSignals(
   }
 
   return signals;
+}
+
+/**
+ * Collects Milestone 3 instance-scoped signals from TransportGraph
+ * (Path Sensors, Part Spawner/Sink Counters, Virtual HSC Encoder DINT32 & Servo REAL Position).
+ */
+export function collectInstanceFlowSignals(
+  instanceId: UUID,
+  transportGraph?: TransportGraph
+): ComponentSignalDescriptor[] {
+  if (!transportGraph) return [];
+  const list: ComponentSignalDescriptor[] = [];
+
+  for (const spawner of transportGraph.spawners) {
+    if (spawner.instanceId !== instanceId) continue;
+    list.push(
+      {
+        key: makeSpawnerTriggerKey(spawner.id),
+        label: 'Part Feeder · Trigger Spawn',
+        direction: 'PLC_TO_SIM',
+        dataType: 'BOOL',
+        defaultBool: false,
+      },
+      {
+        key: makeSpawnerCountKey(spawner.id),
+        label: 'Part Feeder · Spawned Count',
+        direction: 'SIM_TO_PLC',
+        dataType: 'DINT32',
+        unit: 'pcs',
+        defaultVal: 0,
+      }
+    );
+  }
+
+  for (const sink of transportGraph.sinks) {
+    if (sink.instanceId !== instanceId) continue;
+    list.push({
+      key: makeSinkCountKey(sink.id),
+      label: 'Part Sink · Dispatched Count',
+      direction: 'SIM_TO_PLC',
+      dataType: 'DINT32',
+      unit: 'pcs',
+      defaultVal: 0,
+    });
+  }
+
+  for (const sensor of transportGraph.sensors) {
+    if (sensor.instanceId !== instanceId) continue;
+    const typeLabel =
+      sensor.sensorType === 'photoelectric' ? 'Photo Sensor' : 'Prox Sensor';
+    list.push({
+      key: makeSensorSignalKey(sensor.id),
+      label: `${sensor.name} · ${typeLabel}`,
+      direction: 'SIM_TO_PLC',
+      dataType: 'BOOL',
+    });
+  }
+
+  for (const enc of transportGraph.encoders) {
+    if (enc.targetInstanceId !== instanceId) continue;
+    const posUnit = enc.sourceKind === 'rotary-axis' ? '°' : 'mm';
+    const velUnit = enc.sourceKind === 'rotary-axis' ? '°/s' : 'mm/s';
+    list.push(
+      {
+        key: makeEncoderPulsesKey(enc.id),
+        label: `${enc.name} · Encoder Pulse`,
+        direction: 'SIM_TO_PLC',
+        dataType: 'DINT32',
+        unit: 'pulse',
+        defaultVal: 0,
+      },
+      {
+        key: makeEncoderPosKey(enc.id),
+        label: `${enc.name} · Servo Position`,
+        direction: 'SIM_TO_PLC',
+        dataType: 'FLOAT32',
+        unit: posUnit,
+        defaultVal: 0,
+      },
+      {
+        key: makeEncoderVelKey(enc.id),
+        label: `${enc.name} · Actual Velocity`,
+        direction: 'SIM_TO_PLC',
+        dataType: 'FLOAT32',
+        unit: velUnit,
+        defaultVal: 0,
+      }
+    );
+  }
+
+  return list;
+}
+
+export function collectInstanceAllSignals(
+  instanceId: UUID,
+  comp: ComponentDefinition,
+  transportGraph?: TransportGraph
+): ComponentSignalDescriptor[] {
+  const flowSignals = collectInstanceFlowSignals(instanceId, transportGraph);
+  if (flowSignals.length === 0) return comp.exposedSignals;
+  return [...comp.exposedSignals, ...flowSignals];
 }
 
 interface PartitionRange {
@@ -341,13 +473,15 @@ function partitionBucketKey(
 }
 
 /**
- * Synchronizes `PlcTagMap.bindings` with all placed 3D scene instances and their
- * ComponentDefinition `exposedSignals`, preserving existing forces and custom PLC addresses.
+ * Synchronizes `PlcTagMap.bindings` with all placed 3D scene instances, their
+ * ComponentDefinition `exposedSignals`, and instance-level `TransportGraph` elements,
+ * preserving existing forces and custom PLC addresses.
  */
 export function syncPlcTagMapWithScene(
   instances: SceneNodeInstance[],
   componentLibrary: ComponentDefinition[],
-  prevTagMap: PlcTagMap
+  prevTagMap: PlcTagMap,
+  transportGraph?: TransportGraph
 ): PlcTagMap {
   const compMap = new Map(componentLibrary.map((c) => [c.id, c]));
   const existingByCompositeKey = new Map<string, PlcTagBinding>();
@@ -371,8 +505,9 @@ export function syncPlcTagMapWithScene(
   for (const inst of instances) {
     const comp = compMap.get(inst.componentId);
     if (!comp) continue;
+    const allSignals = collectInstanceAllSignals(inst.id, comp, transportGraph);
 
-    for (const sig of comp.exposedSignals) {
+    for (const sig of allSignals) {
       const prev = existingByCompositeKey.get(`${inst.id}::${sig.key}`);
       if (!prev) continue;
       if (prev.direction !== sig.direction || prev.dataType !== sig.dataType) continue;
@@ -395,8 +530,9 @@ export function syncPlcTagMapWithScene(
   for (const inst of instances) {
     const comp = compMap.get(inst.componentId);
     if (!comp) continue;
+    const allSignals = collectInstanceAllSignals(inst.id, comp, transportGraph);
 
-    for (const sig of comp.exposedSignals) {
+    for (const sig of allSignals) {
       const compositeKey = `${inst.id}::${sig.key}`;
       const prev = existingByCompositeKey.get(compositeKey);
       const range = getSlotPartition(sig.direction, sig.dataType);
@@ -426,7 +562,7 @@ export function syncPlcTagMapWithScene(
       const legacyPrev = legacyKey ? existingByCompositeKey.get(legacyKey) : undefined;
 
       const defaultForceVal: boolean | number =
-        sig.dataType === 'BOOL' ? false : (sig.defaultVal ?? 0);
+        sig.dataType === 'BOOL' ? (sig.defaultBool ?? false) : (sig.defaultVal ?? 0);
 
       nextBindings.push({
         id: prev?.id ?? `tag-${inst.id}-${sig.key}`,

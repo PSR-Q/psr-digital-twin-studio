@@ -211,7 +211,21 @@ export const BUILTIN_COMPONENT_CATALOG: ComponentDefinition[] = [
         localUp: [0, 1, 0],
       },
     ],
-    transportPaths: [],
+    transportPaths: [
+      {
+        id: 'path-turntable-deck',
+        name: 'Turntable Deck Centerline',
+        inPortId: 'port-west-in',
+        outPortId: 'port-east-out',
+        waypoints: [
+          [-0.48, 0.8, 0],
+          [0, 0.8, 0],
+          [0.48, 0.8, 0],
+        ],
+        interpolation: 'polyline',
+        defaultSpeedMmPerSec: 450,
+      },
+    ],
     sensors: [],
   }),
   withSynthesizedSignals({

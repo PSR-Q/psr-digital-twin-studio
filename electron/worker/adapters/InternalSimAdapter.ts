@@ -37,7 +37,10 @@ export class InternalSimAdapter implements IPlcAdapter {
           Boolean(binding.manualForceValue)
         );
         if (!binding.manualForceEnabled) {
-          bufferView.writePlcToSimBool(binding.bufferSlotIndex, false);
+          bufferView.writePlcToSimBool(
+            binding.bufferSlotIndex,
+            Boolean(binding.manualForceValue)
+          );
         }
       } else {
         const numericVal = Number(binding.manualForceValue ?? 0);

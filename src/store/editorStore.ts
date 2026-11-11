@@ -1,21 +1,32 @@
+import * as THREE from 'three';
 import { create } from 'zustand';
 import { BUILTIN_COMPONENT_CATALOG } from '../engine/builtinCatalog';
 import { buildComponentDefinitionFromGlbBuffer } from '../engine/glbAssetRegistry';
 import type { JogPreviewState } from '../engine/kinematicsEngine';
 import { runtimeBusClient } from '../engine/runtimeBusClient';
 import {
+  collectInstanceAllSignals,
   synthesizeComponentSignals,
-  syncPlcTagMapWithScene,
 } from '../engine/signalCatalogSync';
 import {
+  eulerDegToQuaternion,
   recomputeSceneSnapConnections,
   solveMagneticSnap,
   type SnapSolveResult,
 } from '../engine/snapEngine';
+import { transportRuntime } from '../engine/transportEngine';
+import {
+  makeTransportPathNodeId,
+  syncSceneTransportAndSignals,
+} from '../engine/transportGraphSync';
 import {
   createEmptySceneSchema,
+  createEmptyTransportGraph,
   isValidSceneSchema,
   type ComponentDefinition,
+  type ComponentPathTemplate,
+  type PartSourceRuntimeConfig,
+  type PathSensorBinding,
   type SceneEnvironmentConfig,
   type SceneNodeInstance,
   type SceneSchema,
@@ -25,10 +36,11 @@ import {
   type TransformData,
   type UUID,
   type Vector3Tuple,
+  type VirtualEncoderConfig,
 } from '../shared/schemas';
 
 export type GizmoTransformMode = 'translate' | 'rotate' | 'scale';
-export type InspectorTabMode = 'transform' | 'builder' | 'signals';
+export type InspectorTabMode = 'transform' | 'builder' | 'flow' | 'signals';
 
 function pickDefaultSubMesh(comp: ComponentDefinition | undefined): string | null {
   if (!comp) return null;
@@ -42,10 +54,60 @@ function pickDefaultSubMesh(comp: ComponentDefinition | undefined): string | nul
   return roles[0]?.nodeName ?? null;
 }
 
+function buildAutoCenterlinePath(comp: ComponentDefinition): ComponentPathTemplate {
+  const inPort = comp.snapPorts.find((p) => p.role === 'InputPort');
+  const outPort = comp.snapPorts.find((p) => p.role === 'OutputPort');
+  const [minX, , minZ] = comp.boundingBox.min;
+  const [maxX, maxY, maxZ] = comp.boundingBox.max;
+  const centerZ = Number(((minZ + maxZ) * 0.5).toFixed(3));
+  const surfaceY = Number(Math.max(0.1, maxY).toFixed(3));
+
+  const startPt: Vector3Tuple = inPort
+    ? [inPort.localPosition[0], surfaceY, inPort.localPosition[2]]
+    : [minX, surfaceY, centerZ];
+  const endPt: Vector3Tuple = outPort
+    ? [outPort.localPosition[0], surfaceY, outPort.localPosition[2]]
+    : [maxX, surfaceY, centerZ];
+  const midPt: Vector3Tuple = [
+    Number(((startPt[0] + endPt[0]) * 0.5).toFixed(3)),
+    Number(((startPt[1] + endPt[1]) * 0.5).toFixed(3)),
+    Number(((startPt[2] + endPt[2]) * 0.5).toFixed(3)),
+  ];
+
+  return {
+    id: comp.transportPaths[0]?.id ?? 'path-main',
+    name: comp.transportPaths[0]?.name ?? 'Main Spline Path',
+    inPortId: inPort?.id,
+    outPortId: outPort?.id,
+    waypoints: [startPt, midPt, endPt],
+    interpolation: 'catmull-rom',
+    defaultSpeedMmPerSec: 450,
+  };
+}
+
+function worldPointToLocalInstanceSpace(
+  worldPoint: Vector3Tuple,
+  transform: TransformData
+): Vector3Tuple {
+  const pos = new THREE.Vector3(...transform.position);
+  const invQuat = eulerDegToQuaternion(transform.rotationDeg).invert();
+  const sx = Math.abs(transform.scale[0]) > 1e-4 ? transform.scale[0] : 1;
+  const sy = Math.abs(transform.scale[1]) > 1e-4 ? transform.scale[1] : 1;
+  const sz = Math.abs(transform.scale[2]) > 1e-4 ? transform.scale[2] : 1;
+
+  const v = new THREE.Vector3(...worldPoint).sub(pos).applyQuaternion(invQuat);
+  return [
+    Number((v.x / sx).toFixed(3)),
+    Number((v.y / sy).toFixed(3)),
+    Number((v.z / sz).toFixed(3)),
+  ];
+}
+
 function buildStarterDemoScene(): SceneSchema {
   const base = createEmptySceneSchema(structuredClone(BUILTIN_COMPONENT_CATALOG));
-  base.metadata.name = 'Packaging & Mixing Line Demo';
+  base.metadata.name = 'Packaging, Stopper Queue & HSC Line Demo';
 
+  // Precision-docked 5-stage inline transport line (Z = 0) + Process & OpenUSD Servo Cell (Z = -2.05)
   const instances: SceneNodeInstance[] = [
     {
       id: 'inst-conv-01',
@@ -78,8 +140,8 @@ function buildStarterDemoScene(): SceneSchema {
       name: 'Buffer_Conveyor_02',
       componentId: 'builtin-belt-conveyor-2m',
       transform: {
-        position: [0.38, 0, 0.42],
-        rotationDeg: [0, 12, 0],
+        position: [0.08, 0, 0],
+        rotationDeg: [0, 0, 0],
         scale: [1, 1, 1],
       },
       visible: true,
@@ -91,7 +153,33 @@ function buildStarterDemoScene(): SceneSchema {
       name: 'Corner_Turntable_01',
       componentId: 'builtin-rotary-turntable',
       transform: {
-        position: [2.75, 0, 0],
+        position: [1.56, 0, 0],
+        rotationDeg: [0, 0, 0],
+        scale: [1, 1, 1],
+      },
+      visible: true,
+      locked: false,
+      parameters: {},
+    },
+    {
+      id: 'inst-conv-03',
+      name: 'Outfeed_Conveyor_03',
+      componentId: 'builtin-belt-conveyor-1m',
+      transform: {
+        position: [2.54, 0, 0],
+        rotationDeg: [0, 0, 0],
+        scale: [1, 1, 1],
+      },
+      visible: true,
+      locked: false,
+      parameters: {},
+    },
+    {
+      id: 'inst-gantry-01',
+      name: 'PickPlace_Gantry_01',
+      componentId: 'builtin-openusd-cartesian-gantry',
+      transform: {
+        position: [-1.55, 0, -2.05],
         rotationDeg: [0, 0, 0],
         scale: [1, 1, 1],
       },
@@ -104,7 +192,7 @@ function buildStarterDemoScene(): SceneSchema {
       name: 'Mixing_Vessel_01',
       componentId: 'builtin-mixing-tank-agitator',
       transform: {
-        position: [2.75, 0, -2.1],
+        position: [1.56, 0, -2.05],
         rotationDeg: [0, 90, 0],
         scale: [1, 1, 1],
       },
@@ -115,13 +203,73 @@ function buildStarterDemoScene(): SceneSchema {
   ];
 
   const catalogMap = new Map(base.componentLibrary.map((c) => [c.id, c]));
-  base.instances = instances;
-  base.snapConnections = recomputeSceneSnapConnections(instances, catalogMap);
-  base.plcTagMap = syncPlcTagMapWithScene(
+  const snapConnections = recomputeSceneSnapConnections(instances, catalogMap);
+
+  const seedGraph = createEmptyTransportGraph();
+  seedGraph.spawners = [
+    {
+      id: 'spawner-infeed-01',
+      instanceId: 'inst-conv-01',
+      targetPathNodeId: makeTransportPathNodeId('inst-conv-01', 'path-main'),
+      mode: 'interval',
+      intervalSec: 2.1,
+      maxActiveItems: 40,
+      partDimensionsMm: [280, 220, 160],
+      partColorHex: '#0ea5e9',
+    },
+  ];
+  seedGraph.sinks = [
+    {
+      id: 'sink-outfeed-03',
+      instanceId: 'inst-conv-03',
+      sourcePathNodeId: makeTransportPathNodeId('inst-conv-03', 'path-main'),
+    },
+  ];
+  seedGraph.sensors = [
+    {
+      id: 'sens-pe-infeed',
+      name: 'PE_Infeed',
+      instanceId: 'inst-conv-01',
+      pathNodeId: makeTransportPathNodeId('inst-conv-01', 'path-main'),
+      offsetMm: 550,
+      detectionRadiusMm: 22,
+      sensorType: 'photoelectric',
+      outputBoolSlot: -1,
+    },
+    {
+      id: 'sens-pe-buffer',
+      name: 'PE_AfterStopper',
+      instanceId: 'inst-conv-02',
+      pathNodeId: makeTransportPathNodeId('inst-conv-02', 'path-main'),
+      offsetMm: 360,
+      detectionRadiusMm: 22,
+      sensorType: 'photoelectric',
+      outputBoolSlot: -1,
+    },
+    {
+      id: 'sens-px-exit',
+      name: 'PX_BufferExit',
+      instanceId: 'inst-conv-02',
+      pathNodeId: makeTransportPathNodeId('inst-conv-02', 'path-main'),
+      offsetMm: 1680,
+      detectionRadiusMm: 45,
+      sensorType: 'proximity',
+      outputBoolSlot: -1,
+    },
+  ];
+
+  const synced = syncSceneTransportAndSignals({
     instances,
-    base.componentLibrary,
-    base.plcTagMap
-  );
+    componentLibrary: base.componentLibrary,
+    snapConnections,
+    prevTransportGraph: seedGraph,
+    prevTagMap: base.plcTagMap,
+  });
+
+  base.instances = instances;
+  base.snapConnections = snapConnections;
+  base.transportGraph = synced.transportGraph;
+  base.plcTagMap = synced.plcTagMap;
   return base;
 }
 
@@ -131,6 +279,7 @@ export interface EditorStoreState {
   selectedSubMeshName: string | null;
   inspectorTab: InspectorTabMode;
   jogPreview: JogPreviewState | null;
+  isDrawingSplinePath: boolean;
   gizmoMode: GizmoTransformMode;
   isGizmoDragging: boolean;
   activeSnapPreview: SnapSolveResult | null;
@@ -143,6 +292,7 @@ export interface EditorStoreState {
   selectSubMesh: (nodeName: string | null) => void;
   setInspectorTab: (tab: InspectorTabMode) => void;
   setJogPreview: (preview: JogPreviewState | null) => void;
+  setIsDrawingSplinePath: (drawing: boolean) => void;
   setGizmoMode: (mode: GizmoTransformMode) => void;
   setGizmoDragging: (dragging: boolean) => void;
   setActiveSnapPreview: (snap: SnapSolveResult | null) => void;
@@ -165,6 +315,58 @@ export interface EditorStoreState {
     autoRun?: boolean
   ) => void;
   clearAllForces: () => void;
+
+  // Milestone 3: Spline Transport Path, Sensors, Spawner/Sink & HSC Encoder Authoring
+  ensureComponentSplinePath: (
+    instanceId: UUID,
+    mode?: 'auto-centerline' | 'draw-blank'
+  ) => void;
+  appendSplineWaypointWorld: (instanceId: UUID, worldPoint: Vector3Tuple) => void;
+  updateSplineWaypointLocal: (
+    instanceId: UUID,
+    waypointIndex: number,
+    nextLocal: Vector3Tuple
+  ) => void;
+  insertSplineMidpoint: (instanceId: UUID) => void;
+  removeSplineWaypoint: (instanceId: UUID, waypointIndex: number) => void;
+  reverseSplinePath: (instanceId: UUID) => void;
+  clearSplinePath: (instanceId: UUID) => void;
+  updateComponentPathSettings: (
+    instanceId: UUID,
+    patch: {
+      interpolation?: 'catmull-rom' | 'polyline';
+      defaultSpeedMmPerSec?: number;
+      name?: string;
+    }
+  ) => void;
+
+  setInstanceFlowEndpointRole: (
+    instanceId: UUID,
+    role: 'none' | 'spawner' | 'sink'
+  ) => void;
+  updateInstanceSpawner: (
+    instanceId: UUID,
+    patch: Partial<PartSourceRuntimeConfig>
+  ) => void;
+  triggerManualSpawnNow: (instanceId: UUID) => void;
+  clearAllActiveFlowItems: () => void;
+
+  addInstancePathSensor: (
+    instanceId: UUID,
+    sensorType: 'photoelectric' | 'proximity'
+  ) => void;
+  updateInstancePathSensor: (
+    sensorId: UUID,
+    patch: Partial<PathSensorBinding>
+  ) => void;
+  deleteInstancePathSensor: (sensorId: UUID) => void;
+
+  addInstanceVirtualEncoder: (instanceId: UUID) => void;
+  updateInstanceVirtualEncoder: (
+    encoderId: UUID,
+    patch: Partial<VirtualEncoderConfig>
+  ) => void;
+  deleteInstanceVirtualEncoder: (encoderId: UUID) => void;
 
   // Environment settings
   updateEnvironment: (patch: Partial<SceneEnvironmentConfig>) => void;
@@ -198,7 +400,7 @@ export interface EditorStoreState {
   duplicateInstance: (instanceId: UUID) => void;
   deleteInstance: (instanceId: UUID) => void;
 
-  // Snap Port Authoring (Milestone 1 Component Snap Customizer)
+  // Snap Port Authoring
   addSnapPort: (componentId: UUID, role: SnapPortDefinition['role']) => void;
   updateSnapPort: (
     componentId: UUID,
@@ -212,6 +414,46 @@ function getCatalogMap(library: ComponentDefinition[]): Map<UUID, ComponentDefin
   return new Map(library.map((c) => [c.id, c]));
 }
 
+/**
+ * Ensures editing a component's transportPaths on a selected instance clones the ComponentDefinition
+ * if other instances in the scene share that same ComponentDefinition ID (Copy-on-Write),
+ * so custom spline paths on one conveyor don't unexpectedly alter other conveyors!
+ */
+function ensureUniqueComponentForPathEdit(
+  instances: SceneNodeInstance[],
+  library: ComponentDefinition[],
+  targetInstanceId: UUID
+): {
+  instances: SceneNodeInstance[];
+  library: ComponentDefinition[];
+  targetComponent: ComponentDefinition | null;
+} {
+  const inst = instances.find((i) => i.id === targetInstanceId);
+  if (!inst) return { instances, library, targetComponent: null };
+  const comp = library.find((c) => c.id === inst.componentId);
+  if (!comp) return { instances, library, targetComponent: null };
+
+  const sharedCount = instances.filter((i) => i.componentId === comp.id).length;
+  if (sharedCount <= 1) {
+    return { instances, library, targetComponent: comp };
+  }
+
+  const clonedComp: ComponentDefinition = {
+    ...structuredClone(comp),
+    id: `${comp.id}-custom-${targetInstanceId.slice(-4)}`,
+    name: `${comp.name} (${inst.name})`,
+  };
+  const nextInstances = instances.map((i) =>
+    i.id === targetInstanceId ? { ...i, componentId: clonedComp.id } : i
+  );
+  const nextLibrary = [...library, clonedComp];
+  return {
+    instances: nextInstances,
+    library: nextLibrary,
+    targetComponent: clonedComp,
+  };
+}
+
 const initialDemoScene = buildStarterDemoScene();
 runtimeBusClient.syncTagMap(initialDemoScene.plcTagMap);
 
@@ -219,15 +461,16 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
   scene: initialDemoScene,
   selectedInstanceId: 'inst-stopper-01',
   selectedSubMeshName: null,
-  inspectorTab: 'transform',
+  inspectorTab: 'flow',
   jogPreview: null,
+  isDrawingSplinePath: false,
   gizmoMode: 'translate',
   isGizmoDragging: false,
   activeSnapPreview: null,
   runState: 'STOPPED',
   isDirty: false,
   statusMessage:
-    'Milestone 2 Ready — Configure Linear/Rotary joints in "Builder" or click "Force I/O" to test actuators & Reed Switches live.',
+    'Milestone 3 Ready — Press Play (Space) to spawn boxes down the Spline Line, Force Stopper ON to queue parts, and monitor HSC Encoder (DINT) & Servo Position (REAL).',
 
   selectInstance: (id) =>
     set((state) => {
@@ -244,6 +487,7 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         selectedInstanceId: id,
         selectedSubMeshName: nextSubMesh,
         jogPreview: null,
+        isDrawingSplinePath: false,
       };
     }),
 
@@ -271,10 +515,20 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         inspectorTab,
         selectedSubMeshName: nextSubMesh,
         jogPreview: null,
+        isDrawingSplinePath:
+          inspectorTab === 'flow' ? state.isDrawingSplinePath : false,
       };
     }),
 
   setJogPreview: (jogPreview) => set({ jogPreview }),
+
+  setIsDrawingSplinePath: (isDrawingSplinePath) =>
+    set((state) => ({
+      isDrawingSplinePath,
+      statusMessage: isDrawingSplinePath
+        ? 'Spline Draw Mode ACTIVE — Click along the 3D conveyor surface to place waypoints (Esc to finish).'
+        : state.statusMessage,
+    })),
 
   setGizmoMode: (gizmoMode) => set({ gizmoMode }),
 
@@ -289,17 +543,25 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
   setStatusMessage: (statusMessage) => set({ statusMessage }),
 
   setRunState: (runState) => {
-    const mult = get().scene.environment.simSpeedMultiplier;
+    const state = get();
+    const mult = state.scene.environment.simSpeedMultiplier;
+    if (runState === 'STOPPED') {
+      transportRuntime.clearAllFlowItems(
+        runtimeBusClient.bufferView,
+        state.scene.transportGraph
+      );
+    }
     runtimeBusClient.sendControl(runState, mult);
     set({
       runState,
       jogPreview: null,
+      isDrawingSplinePath: false,
       statusMessage:
         runState === 'RUNNING'
-          ? `Simulation RUNNING (${mult.toFixed(1)}x speed — Cyclic I/O & Forward Kinematics Active)`
+          ? `Simulation RUNNING (${mult.toFixed(1)}x — Spline Material Flow, Sensors & HSC Encoders Active)`
           : runState === 'PAUSED'
-            ? 'Simulation PAUSED'
-            : 'Simulation STOPPED & Reset to Home',
+            ? 'Simulation PAUSED — Workpieces & Encoder registers held'
+            : 'Simulation STOPPED — Reset actuators, cleared flow items & zeroed belt encoders',
     });
   },
 
@@ -332,12 +594,14 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       };
     });
 
-    const nextTagMap = syncPlcTagMapWithScene(
-      state.scene.instances,
-      nextLibrary,
-      state.scene.plcTagMap
-    );
-    runtimeBusClient.syncTagMap(nextTagMap);
+    const synced = syncSceneTransportAndSignals({
+      instances: state.scene.instances,
+      componentLibrary: nextLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: state.scene.transportGraph,
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
 
     set({
       isDirty: true,
@@ -346,9 +610,10 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       scene: {
         ...state.scene,
         componentLibrary: nextLibrary,
-        plcTagMap: nextTagMap,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
       },
-      statusMessage: `Updated "${nodeName}" role -> ${assignment.role} (${nextTagMap.bindings.length} scene I/O tags synced).`,
+      statusMessage: `Updated "${nodeName}" role -> ${assignment.role} (${synced.plcTagMap.bindings.length} scene I/O tags synced).`,
     });
   },
 
@@ -359,21 +624,25 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     );
     if (!targetBinding) return;
 
-    // Resolve resting defaultVal when unforcing an analog/BOOL tag
     let effectiveVal: boolean | number = value;
     if (!enabled) {
+      const inst = state.scene.instances.find(
+        (i) => i.id === targetBinding.instanceId
+      );
+      const comp = inst
+        ? state.scene.componentLibrary.find((c) => c.id === inst.componentId)
+        : undefined;
+      const sigDesc = comp
+        ? collectInstanceAllSignals(
+            targetBinding.instanceId,
+            comp,
+            state.scene.transportGraph
+          ).find((s) => s.key === targetBinding.componentSignalKey)
+        : undefined;
+
       if (targetBinding.dataType === 'BOOL') {
-        effectiveVal = false;
+        effectiveVal = sigDesc?.defaultBool ?? false;
       } else {
-        const inst = state.scene.instances.find(
-          (i) => i.id === targetBinding.instanceId
-        );
-        const comp = inst
-          ? state.scene.componentLibrary.find((c) => c.id === inst.componentId)
-          : undefined;
-        const sigDesc = comp?.exposedSignals.find(
-          (s) => s.key === targetBinding.componentSignalKey
-        );
         effectiveVal = sigDesc?.defaultVal ?? 0;
       }
     }
@@ -420,14 +689,19 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     const instMap = new Map(state.scene.instances.map((i) => [i.id, i]));
 
     const nextBindings = state.scene.plcTagMap.bindings.map((b) => {
-      if (!b.manualForceEnabled && b.dataType === 'BOOL') return b;
       const inst = instMap.get(b.instanceId);
       const comp = inst ? compMap.get(inst.componentId) : undefined;
-      const sigDesc = comp?.exposedSignals.find(
-        (s) => s.key === b.componentSignalKey
-      );
+      const sigDesc = comp
+        ? collectInstanceAllSignals(
+            b.instanceId,
+            comp,
+            state.scene.transportGraph
+          ).find((s) => s.key === b.componentSignalKey)
+        : undefined;
       const resetVal: boolean | number =
-        b.dataType === 'BOOL' ? false : (sigDesc?.defaultVal ?? 0);
+        b.dataType === 'BOOL'
+          ? (sigDesc?.defaultBool ?? false)
+          : (sigDesc?.defaultVal ?? 0);
       return {
         ...b,
         manualForceEnabled: false,
@@ -447,6 +721,758 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         plcTagMap: nextTagMap,
       },
       statusMessage: 'Cleared all manual Forced I/O overrides.',
+    });
+  },
+
+  // =========================================================================
+  // MILESTONE 3: SPLINE PATH, SENSOR, SPAWNER/SINK & VIRTUAL HSC ENCODER ACTIONS
+  // =========================================================================
+
+  ensureComponentSplinePath: (instanceId, mode = 'auto-centerline') => {
+    const state = get();
+    const cow = ensureUniqueComponentForPathEdit(
+      state.scene.instances,
+      state.scene.componentLibrary,
+      instanceId
+    );
+    if (!cow.targetComponent) return;
+
+    const autoTpl = buildAutoCenterlinePath(cow.targetComponent);
+    const nextPath: ComponentPathTemplate =
+      mode === 'draw-blank'
+        ? {
+            ...autoTpl,
+            waypoints: [],
+          }
+        : autoTpl;
+
+    const nextLibrary = cow.library.map((c) =>
+      c.id === cow.targetComponent!.id ? { ...c, transportPaths: [nextPath] } : c
+    );
+    const catalogMap = getCatalogMap(nextLibrary);
+    const nextConnections = recomputeSceneSnapConnections(cow.instances, catalogMap);
+    const synced = syncSceneTransportAndSignals({
+      instances: cow.instances,
+      componentLibrary: nextLibrary,
+      snapConnections: nextConnections,
+      prevTransportGraph: state.scene.transportGraph,
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      isDrawingSplinePath: mode === 'draw-blank',
+      scene: {
+        ...state.scene,
+        instances: cow.instances,
+        componentLibrary: nextLibrary,
+        snapConnections: nextConnections,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+      statusMessage:
+        mode === 'draw-blank'
+          ? 'Click 2 or more points along the 3D belt surface to draw your custom Spline Path.'
+          : `Generated InPort -> OutPort Spline Path (${nextPath.waypoints.length} waypoints).`,
+    });
+  },
+
+  appendSplineWaypointWorld: (instanceId, worldPoint) => {
+    const state = get();
+    const cow = ensureUniqueComponentForPathEdit(
+      state.scene.instances,
+      state.scene.componentLibrary,
+      instanceId
+    );
+    if (!cow.targetComponent) return;
+    const inst = cow.instances.find((i) => i.id === instanceId);
+    if (!inst) return;
+
+    const localPt = worldPointToLocalInstanceSpace(worldPoint, inst.transform);
+    // Lift slightly onto belt surface if clicked on top face
+    const existingTpl =
+      cow.targetComponent.transportPaths[0] ??
+      ({
+        ...buildAutoCenterlinePath(cow.targetComponent),
+        waypoints: [],
+      } satisfies ComponentPathTemplate);
+
+    const nextWaypoints: Vector3Tuple[] = [...existingTpl.waypoints, localPt];
+    const nextTpl: ComponentPathTemplate = {
+      ...existingTpl,
+      waypoints: nextWaypoints,
+    };
+
+    const nextLibrary = cow.library.map((c) =>
+      c.id === cow.targetComponent!.id ? { ...c, transportPaths: [nextTpl] } : c
+    );
+    const catalogMap = getCatalogMap(nextLibrary);
+    const nextConnections = recomputeSceneSnapConnections(cow.instances, catalogMap);
+    const synced = syncSceneTransportAndSignals({
+      instances: cow.instances,
+      componentLibrary: nextLibrary,
+      snapConnections: nextConnections,
+      prevTransportGraph: state.scene.transportGraph,
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        instances: cow.instances,
+        componentLibrary: nextLibrary,
+        snapConnections: nextConnections,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+      statusMessage: `Added Spline Waypoint #${nextWaypoints.length} at local [${localPt.join(', ')}] m.`,
+    });
+  },
+
+  updateSplineWaypointLocal: (instanceId, waypointIndex, nextLocal) => {
+    const state = get();
+    const cow = ensureUniqueComponentForPathEdit(
+      state.scene.instances,
+      state.scene.componentLibrary,
+      instanceId
+    );
+    if (!cow.targetComponent || cow.targetComponent.transportPaths.length === 0) return;
+
+    const tpl = cow.targetComponent.transportPaths[0];
+    if (waypointIndex < 0 || waypointIndex >= tpl.waypoints.length) return;
+
+    const nextWaypoints = tpl.waypoints.map((wp, idx) =>
+      idx === waypointIndex ? nextLocal : wp
+    );
+    const nextLibrary = cow.library.map((c) =>
+      c.id === cow.targetComponent!.id
+        ? { ...c, transportPaths: [{ ...tpl, waypoints: nextWaypoints }] }
+        : c
+    );
+    const synced = syncSceneTransportAndSignals({
+      instances: cow.instances,
+      componentLibrary: nextLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: state.scene.transportGraph,
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        instances: cow.instances,
+        componentLibrary: nextLibrary,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+    });
+  },
+
+  insertSplineMidpoint: (instanceId) => {
+    const state = get();
+    const cow = ensureUniqueComponentForPathEdit(
+      state.scene.instances,
+      state.scene.componentLibrary,
+      instanceId
+    );
+    if (!cow.targetComponent) return;
+
+    const tpl =
+      cow.targetComponent.transportPaths[0] ??
+      buildAutoCenterlinePath(cow.targetComponent);
+
+    let nextWaypoints: Vector3Tuple[];
+    if (tpl.waypoints.length < 2) {
+      nextWaypoints = buildAutoCenterlinePath(cow.targetComponent).waypoints;
+    } else {
+      const lastIdx = tpl.waypoints.length - 1;
+      const a = tpl.waypoints[lastIdx - 1];
+      const b = tpl.waypoints[lastIdx];
+      const mid: Vector3Tuple = [
+        Number(((a[0] + b[0]) * 0.5).toFixed(3)),
+        Number(((a[1] + b[1]) * 0.5).toFixed(3)),
+        Number(((a[2] + b[2]) * 0.5).toFixed(3)),
+      ];
+      nextWaypoints = [
+        ...tpl.waypoints.slice(0, lastIdx),
+        mid,
+        tpl.waypoints[lastIdx],
+      ];
+    }
+
+    const nextLibrary = cow.library.map((c) =>
+      c.id === cow.targetComponent!.id
+        ? { ...c, transportPaths: [{ ...tpl, waypoints: nextWaypoints }] }
+        : c
+    );
+    const synced = syncSceneTransportAndSignals({
+      instances: cow.instances,
+      componentLibrary: nextLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: state.scene.transportGraph,
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        instances: cow.instances,
+        componentLibrary: nextLibrary,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+      statusMessage: `Inserted curve control point (${nextWaypoints.length} waypoints).`,
+    });
+  },
+
+  removeSplineWaypoint: (instanceId, waypointIndex) => {
+    const state = get();
+    const cow = ensureUniqueComponentForPathEdit(
+      state.scene.instances,
+      state.scene.componentLibrary,
+      instanceId
+    );
+    if (!cow.targetComponent || cow.targetComponent.transportPaths.length === 0) return;
+
+    const tpl = cow.targetComponent.transportPaths[0];
+    const nextWaypoints = tpl.waypoints.filter((_, idx) => idx !== waypointIndex);
+    const nextLibrary = cow.library.map((c) =>
+      c.id === cow.targetComponent!.id
+        ? { ...c, transportPaths: [{ ...tpl, waypoints: nextWaypoints }] }
+        : c
+    );
+    const synced = syncSceneTransportAndSignals({
+      instances: cow.instances,
+      componentLibrary: nextLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: state.scene.transportGraph,
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        instances: cow.instances,
+        componentLibrary: nextLibrary,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+    });
+  },
+
+  reverseSplinePath: (instanceId) => {
+    const state = get();
+    const cow = ensureUniqueComponentForPathEdit(
+      state.scene.instances,
+      state.scene.componentLibrary,
+      instanceId
+    );
+    if (!cow.targetComponent || cow.targetComponent.transportPaths.length === 0) return;
+
+    const tpl = cow.targetComponent.transportPaths[0];
+    const reversed: ComponentPathTemplate = {
+      ...tpl,
+      inPortId: tpl.outPortId,
+      outPortId: tpl.inPortId,
+      waypoints: [...tpl.waypoints].reverse(),
+    };
+    const nextLibrary = cow.library.map((c) =>
+      c.id === cow.targetComponent!.id ? { ...c, transportPaths: [reversed] } : c
+    );
+    const synced = syncSceneTransportAndSignals({
+      instances: cow.instances,
+      componentLibrary: nextLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: state.scene.transportGraph,
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        instances: cow.instances,
+        componentLibrary: nextLibrary,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+      statusMessage: 'Reversed Spline Path transport direction.',
+    });
+  },
+
+  clearSplinePath: (instanceId) => {
+    const state = get();
+    const cow = ensureUniqueComponentForPathEdit(
+      state.scene.instances,
+      state.scene.componentLibrary,
+      instanceId
+    );
+    if (!cow.targetComponent) return;
+
+    const nextLibrary = cow.library.map((c) =>
+      c.id === cow.targetComponent!.id ? { ...c, transportPaths: [] } : c
+    );
+    const synced = syncSceneTransportAndSignals({
+      instances: cow.instances,
+      componentLibrary: nextLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: state.scene.transportGraph,
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      isDrawingSplinePath: false,
+      scene: {
+        ...state.scene,
+        instances: cow.instances,
+        componentLibrary: nextLibrary,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+      statusMessage: 'Cleared Spline Path on selected machine.',
+    });
+  },
+
+  updateComponentPathSettings: (instanceId, patch) => {
+    const state = get();
+    const cow = ensureUniqueComponentForPathEdit(
+      state.scene.instances,
+      state.scene.componentLibrary,
+      instanceId
+    );
+    if (!cow.targetComponent || cow.targetComponent.transportPaths.length === 0) return;
+
+    const tpl = cow.targetComponent.transportPaths[0];
+    const nextTpl: ComponentPathTemplate = { ...tpl, ...patch };
+    const nextLibrary = cow.library.map((c) =>
+      c.id === cow.targetComponent!.id ? { ...c, transportPaths: [nextTpl] } : c
+    );
+    const synced = syncSceneTransportAndSignals({
+      instances: cow.instances,
+      componentLibrary: nextLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: state.scene.transportGraph,
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        instances: cow.instances,
+        componentLibrary: nextLibrary,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+    });
+  },
+
+  setInstanceFlowEndpointRole: (instanceId, role) => {
+    const state = get();
+    const primaryNode = Object.values(state.scene.transportGraph.nodes).find(
+      (n) => n.instanceId === instanceId
+    );
+    if (!primaryNode) {
+      set({
+        statusMessage:
+          'Create or Auto-Generate a Spline Path on this machine first before assigning a Spawner or Sink.',
+      });
+      return;
+    }
+
+    const filteredSpawners = state.scene.transportGraph.spawners.filter(
+      (s) => s.instanceId !== instanceId
+    );
+    const filteredSinks = state.scene.transportGraph.sinks.filter(
+      (s) => s.instanceId !== instanceId
+    );
+
+    if (role === 'spawner') {
+      filteredSpawners.push({
+        id: `spawner-${instanceId}`,
+        instanceId,
+        targetPathNodeId: primaryNode.id,
+        mode: 'interval',
+        intervalSec: 2.2,
+        maxActiveItems: 40,
+        partDimensionsMm: [280, 220, 160],
+        partColorHex: '#0ea5e9',
+      });
+    } else if (role === 'sink') {
+      filteredSinks.push({
+        id: `sink-${instanceId}`,
+        instanceId,
+        sourcePathNodeId: primaryNode.id,
+      });
+    }
+
+    const synced = syncSceneTransportAndSignals({
+      instances: state.scene.instances,
+      componentLibrary: state.scene.componentLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: {
+        ...state.scene.transportGraph,
+        spawners: filteredSpawners,
+        sinks: filteredSinks,
+      },
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+      statusMessage:
+        role === 'spawner'
+          ? 'Configured machine as Part Feeder (PartSource).'
+          : role === 'sink'
+            ? 'Configured machine as Exit Despawner (PartSink).'
+            : 'Set machine to Pass-Through Transport.',
+    });
+  },
+
+  updateInstanceSpawner: (instanceId, patch) => {
+    const state = get();
+    const nextSpawners = state.scene.transportGraph.spawners.map((sp) =>
+      sp.instanceId === instanceId ? { ...sp, ...patch } : sp
+    );
+    const synced = syncSceneTransportAndSignals({
+      instances: state.scene.instances,
+      componentLibrary: state.scene.componentLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: {
+        ...state.scene.transportGraph,
+        spawners: nextSpawners,
+      },
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+    });
+  },
+
+  triggerManualSpawnNow: (instanceId) => {
+    const state = get();
+    const spawned = transportRuntime.spawnSinglePartNow(
+      state.scene.transportGraph,
+      instanceId
+    );
+    if (!spawned) {
+      set({
+        statusMessage:
+          'Spawn entry zone currently occupied — wait for box clearance or run the belt.',
+      });
+      return;
+    }
+
+    let nextRunState = state.runState;
+    if (state.runState === 'STOPPED') {
+      nextRunState = 'RUNNING';
+      runtimeBusClient.sendControl(
+        'RUNNING',
+        state.scene.environment.simSpeedMultiplier
+      );
+    }
+
+    set({
+      runState: nextRunState,
+      statusMessage: `Spawned workpiece #${spawned.serialNumber} (${spawned.dimensionsMm.join('×')} mm).`,
+    });
+  },
+
+  clearAllActiveFlowItems: () => {
+    const state = get();
+    transportRuntime.clearAllFlowItems(
+      runtimeBusClient.bufferView,
+      state.scene.transportGraph
+    );
+    set({
+      statusMessage: 'Cleared all active workpieces and reset belt counters.',
+    });
+  },
+
+  addInstancePathSensor: (instanceId, sensorType) => {
+    const state = get();
+    const primaryNode = Object.values(state.scene.transportGraph.nodes).find(
+      (n) => n.instanceId === instanceId
+    );
+    if (!primaryNode) {
+      set({
+        statusMessage: 'Create a Spline Path on this conveyor before adding a sensor.',
+      });
+      return;
+    }
+
+    const existingCount = state.scene.transportGraph.sensors.filter(
+      (s) => s.instanceId === instanceId
+    ).length;
+    const prefix = sensorType === 'photoelectric' ? 'PE' : 'PX';
+    const sensorId = `sens-${crypto.randomUUID().slice(0, 6)}`;
+    const defaultOffset = Number(
+      Math.min(
+        primaryNode.arcLengthMm * 0.85,
+        primaryNode.arcLengthMm * (0.35 + (existingCount % 3) * 0.25)
+      ).toFixed(0)
+    );
+
+    const newSensor: PathSensorBinding = {
+      id: sensorId,
+      name: `${prefix}_Sensor_${existingCount + 1}`,
+      instanceId,
+      pathNodeId: primaryNode.id,
+      offsetMm: defaultOffset,
+      detectionRadiusMm: sensorType === 'photoelectric' ? 22 : 45,
+      sensorType,
+      outputBoolSlot: -1,
+    };
+
+    const synced = syncSceneTransportAndSignals({
+      instances: state.scene.instances,
+      componentLibrary: state.scene.componentLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: {
+        ...state.scene.transportGraph,
+        sensors: [...state.scene.transportGraph.sensors, newSensor],
+      },
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+      statusMessage: `Mounted ${newSensor.name} (${sensorType}) at ${defaultOffset} mm along path.`,
+    });
+  },
+
+  updateInstancePathSensor: (sensorId, patch) => {
+    const state = get();
+    const nextSensors = state.scene.transportGraph.sensors.map((s) =>
+      s.id === sensorId ? { ...s, ...patch } : s
+    );
+    const synced = syncSceneTransportAndSignals({
+      instances: state.scene.instances,
+      componentLibrary: state.scene.componentLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: {
+        ...state.scene.transportGraph,
+        sensors: nextSensors,
+      },
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+    });
+  },
+
+  deleteInstancePathSensor: (sensorId) => {
+    const state = get();
+    const nextSensors = state.scene.transportGraph.sensors.filter(
+      (s) => s.id !== sensorId
+    );
+    const synced = syncSceneTransportAndSignals({
+      instances: state.scene.instances,
+      componentLibrary: state.scene.componentLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: {
+        ...state.scene.transportGraph,
+        sensors: nextSensors,
+      },
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+      statusMessage: 'Removed Path Sensor.',
+    });
+  },
+
+  addInstanceVirtualEncoder: (instanceId) => {
+    const state = get();
+    const inst = state.scene.instances.find((i) => i.id === instanceId);
+    if (!inst) return;
+    const comp = state.scene.componentLibrary.find((c) => c.id === inst.componentId);
+    if (!comp) return;
+
+    const primaryNode = Object.values(state.scene.transportGraph.nodes).find(
+      (n) => n.instanceId === instanceId
+    );
+    const linearOrRotary = Object.values(comp.nodeRoles).find(
+      (r) => r.role === 'LinearAxis' || r.role === 'RotaryAxis'
+    );
+
+    let newEnc: VirtualEncoderConfig | null = null;
+    if (primaryNode) {
+      newEnc = {
+        id: `enc-${crypto.randomUUID().slice(0, 6)}`,
+        name: 'Belt HSC',
+        sourceKind: 'transport-path',
+        targetInstanceId: instanceId,
+        targetSubKey: primaryNode.componentPathId,
+        pulsesPerRevolution: 1024,
+        travelMmPerRevolution: 471.24,
+        rolloverModulo: 1_000_000,
+        cumulativePulsesDintSlot: -1,
+        actualPositionRealSlot: -1,
+        actualVelocityRealSlot: -1,
+      };
+    } else if (linearOrRotary) {
+      const isRot = linearOrRotary.role === 'RotaryAxis';
+      newEnc = {
+        id: `enc-${crypto.randomUUID().slice(0, 6)}`,
+        name: isRot ? 'Rotary Servo' : 'Linear Servo',
+        sourceKind: isRot ? 'rotary-axis' : 'linear-axis',
+        targetInstanceId: instanceId,
+        targetSubKey: linearOrRotary.nodeName,
+        pulsesPerRevolution: 4096,
+        travelMmPerRevolution: isRot ? 360 : 10,
+        rolloverModulo: 2_147_483_647,
+        cumulativePulsesDintSlot: -1,
+        actualPositionRealSlot: -1,
+        actualVelocityRealSlot: -1,
+      };
+    }
+
+    if (!newEnc) {
+      set({
+        statusMessage:
+          'Add a Spline Path or a Linear/Rotary Axis on this machine first to attach an Encoder.',
+      });
+      return;
+    }
+
+    const nextInstances = state.scene.instances.map((i) =>
+      i.id === instanceId
+        ? { ...i, parameters: { ...i.parameters, __disableAutoEncoder: false } }
+        : i
+    );
+    const synced = syncSceneTransportAndSignals({
+      instances: nextInstances,
+      componentLibrary: state.scene.componentLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: {
+        ...state.scene.transportGraph,
+        encoders: [...state.scene.transportGraph.encoders, newEnc],
+      },
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        instances: nextInstances,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+      statusMessage: `Attached Virtual HSC Encoder "${newEnc.name}" (DINT32 Pulses + REAL Position).`,
+    });
+  },
+
+  updateInstanceVirtualEncoder: (encoderId, patch) => {
+    const state = get();
+    const nextEncoders = state.scene.transportGraph.encoders.map((e) =>
+      e.id === encoderId ? { ...e, ...patch } : e
+    );
+    const synced = syncSceneTransportAndSignals({
+      instances: state.scene.instances,
+      componentLibrary: state.scene.componentLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: {
+        ...state.scene.transportGraph,
+        encoders: nextEncoders,
+      },
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+    });
+  },
+
+  deleteInstanceVirtualEncoder: (encoderId) => {
+    const state = get();
+    const target = state.scene.transportGraph.encoders.find((e) => e.id === encoderId);
+    const nextEncoders = state.scene.transportGraph.encoders.filter(
+      (e) => e.id !== encoderId
+    );
+    const nextInstances = target
+      ? state.scene.instances.map((i) =>
+          i.id === target.targetInstanceId
+            ? { ...i, parameters: { ...i.parameters, __disableAutoEncoder: true } }
+            : i
+        )
+      : state.scene.instances;
+
+    const synced = syncSceneTransportAndSignals({
+      instances: nextInstances,
+      componentLibrary: state.scene.componentLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: {
+        ...state.scene.transportGraph,
+        encoders: nextEncoders,
+      },
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        instances: nextInstances,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+      statusMessage: 'Removed Virtual Encoder.',
     });
   },
 
@@ -477,6 +1503,10 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
 
   newEmptyScene: () => {
     const empty = createEmptySceneSchema(structuredClone(BUILTIN_COMPONENT_CATALOG));
+    transportRuntime.clearAllFlowItems(
+      runtimeBusClient.bufferView,
+      empty.transportGraph
+    );
     runtimeBusClient.sendControl('STOPPED', 1.0);
     runtimeBusClient.syncTagMap(empty.plcTagMap);
     set({
@@ -484,6 +1514,7 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       selectedInstanceId: null,
       selectedSubMeshName: null,
       jogPreview: null,
+      isDrawingSplinePath: false,
       activeSnapPreview: null,
       runState: 'STOPPED',
       isDirty: false,
@@ -494,6 +1525,10 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
 
   loadStarterDemoScene: () => {
     const demo = buildStarterDemoScene();
+    transportRuntime.clearAllFlowItems(
+      runtimeBusClient.bufferView,
+      demo.transportGraph
+    );
     runtimeBusClient.sendControl('STOPPED', 1.0);
     runtimeBusClient.syncTagMap(demo.plcTagMap);
     set({
@@ -501,11 +1536,12 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       selectedInstanceId: 'inst-stopper-01',
       selectedSubMeshName: null,
       jogPreview: null,
+      isDrawingSplinePath: false,
       activeSnapPreview: null,
       runState: 'STOPPED',
       isDirty: false,
       statusMessage:
-        'Loaded Packaging & Mixing Line Demo layout with pre-mapped I/O signals.',
+        'Loaded Packaging, Stopper Queue & HSC Encoder Demo Line — press Play (Space) to start material flow!',
     });
   },
 
@@ -519,58 +1555,59 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         return false;
       }
 
-      // Ensure built-in catalog items remain available and legacy M1 components synthesize M2 signals
       const mergedMap = new Map<UUID, ComponentDefinition>();
       for (const builtin of BUILTIN_COMPONENT_CATALOG) {
         mergedMap.set(builtin.id, structuredClone(builtin));
       }
       for (const comp of parsed.componentLibrary) {
-        const hasModernNodeKeys = comp.exposedSignals.some((s) =>
-          s.key.includes('::')
-        );
-        const hasLegacyBeltPct = comp.exposedSignals.some((s) =>
-          s.key.endsWith('::AO_SpeedPct')
-        );
-        const upgradedComp: ComponentDefinition =
-          hasModernNodeKeys && !hasLegacyBeltPct
-            ? comp
-            : {
-                ...comp,
-                exposedSignals: synthesizeComponentSignals(comp.nodeRoles),
-              };
-        mergedMap.set(upgradedComp.id, upgradedComp);
+        mergedMap.set(comp.id, {
+          ...comp,
+          exposedSignals: synthesizeComponentSignals(comp.nodeRoles),
+        });
       }
       const mergedLibrary = Array.from(mergedMap.values());
       const snapConnections = recomputeSceneSnapConnections(
         parsed.instances,
         mergedMap
       );
-      const syncedTagMap = syncPlcTagMapWithScene(
-        parsed.instances,
-        mergedLibrary,
-        parsed.plcTagMap
-      );
+      const synced = syncSceneTransportAndSignals({
+        instances: parsed.instances,
+        componentLibrary: mergedLibrary,
+        snapConnections,
+        prevTransportGraph: parsed.transportGraph ?? createEmptyTransportGraph(),
+        prevTagMap: parsed.plcTagMap,
+      });
 
+      transportRuntime.clearAllFlowItems(
+        runtimeBusClient.bufferView,
+        synced.transportGraph
+      );
       runtimeBusClient.sendControl(
         'STOPPED',
         parsed.environment.simSpeedMultiplier ?? 1.0
       );
-      runtimeBusClient.syncTagMap(syncedTagMap);
+      runtimeBusClient.syncTagMap(synced.plcTagMap);
 
       set({
         scene: {
           ...parsed,
+          environment: {
+            showTransportPaths: true,
+            ...parsed.environment,
+          },
           componentLibrary: mergedLibrary,
           snapConnections,
-          plcTagMap: syncedTagMap,
+          transportGraph: synced.transportGraph,
+          plcTagMap: synced.plcTagMap,
         },
         selectedInstanceId: parsed.instances[0]?.id ?? null,
         selectedSubMeshName: null,
         jogPreview: null,
+        isDrawingSplinePath: false,
         activeSnapPreview: null,
         runState: 'STOPPED',
         isDirty: false,
-        statusMessage: `Loaded "${parsed.metadata.name}" from ${sourceLabel} (${parsed.instances.length} machines, ${syncedTagMap.bindings.length} I/O signals).`,
+        statusMessage: `Loaded "${parsed.metadata.name}" from ${sourceLabel} (${parsed.instances.length} machines, ${synced.plcTagMap.bindings.length} I/O signals).`,
       });
       return true;
     } catch (err) {
@@ -708,12 +1745,14 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
 
     const nextInstances = [...state.scene.instances, newInstance];
     const nextConnections = recomputeSceneSnapConnections(nextInstances, catalogMap);
-    const nextTagMap = syncPlcTagMapWithScene(
-      nextInstances,
-      state.scene.componentLibrary,
-      state.scene.plcTagMap
-    );
-    runtimeBusClient.syncTagMap(nextTagMap);
+    const synced = syncSceneTransportAndSignals({
+      instances: nextInstances,
+      componentLibrary: state.scene.componentLibrary,
+      snapConnections: nextConnections,
+      prevTransportGraph: state.scene.transportGraph,
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
 
     set({
       isDirty: true,
@@ -721,11 +1760,13 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       selectedSubMeshName:
         state.inspectorTab === 'builder' ? pickDefaultSubMesh(component) : null,
       jogPreview: null,
+      isDrawingSplinePath: false,
       scene: {
         ...state.scene,
         instances: nextInstances,
         snapConnections: nextConnections,
-        plcTagMap: nextTagMap,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
       },
       statusMessage: `Placed "${instanceName}"${snapNote}`,
     });
@@ -835,12 +1876,28 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       const nextInstances = state.scene.instances.map((inst) =>
         inst.id === instanceId ? { ...inst, transform } : inst
       );
-      const nextConnections = commitConnections
-        ? recomputeSceneSnapConnections(
-            nextInstances,
-            getCatalogMap(state.scene.componentLibrary)
-          )
-        : state.scene.snapConnections;
+      if (!commitConnections) {
+        return {
+          isDirty: true,
+          scene: {
+            ...state.scene,
+            instances: nextInstances,
+          },
+        };
+      }
+
+      const nextConnections = recomputeSceneSnapConnections(
+        nextInstances,
+        getCatalogMap(state.scene.componentLibrary)
+      );
+      const synced = syncSceneTransportAndSignals({
+        instances: nextInstances,
+        componentLibrary: state.scene.componentLibrary,
+        snapConnections: nextConnections,
+        prevTransportGraph: state.scene.transportGraph,
+        prevTagMap: state.scene.plcTagMap,
+      });
+      runtimeBusClient.syncTagMap(synced.plcTagMap);
 
       return {
         isDirty: true,
@@ -848,6 +1905,8 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
           ...state.scene,
           instances: nextInstances,
           snapConnections: nextConnections,
+          transportGraph: synced.transportGraph,
+          plcTagMap: synced.plcTagMap,
         },
       };
     }),
@@ -857,17 +1916,20 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       const nextInstances = state.scene.instances.map((inst) =>
         inst.id === instanceId ? { ...inst, name } : inst
       );
-      const nextTagMap = syncPlcTagMapWithScene(
-        nextInstances,
-        state.scene.componentLibrary,
-        state.scene.plcTagMap
-      );
+      const synced = syncSceneTransportAndSignals({
+        instances: nextInstances,
+        componentLibrary: state.scene.componentLibrary,
+        snapConnections: state.scene.snapConnections,
+        prevTransportGraph: state.scene.transportGraph,
+        prevTagMap: state.scene.plcTagMap,
+      });
       return {
         isDirty: true,
         scene: {
           ...state.scene,
           instances: nextInstances,
-          plcTagMap: nextTagMap,
+          transportGraph: synced.transportGraph,
+          plcTagMap: synced.plcTagMap,
         },
       };
     }),
@@ -877,15 +1939,27 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       const nextInstances = state.scene.instances.map((inst) =>
         inst.id === instanceId ? { ...inst, visible: !inst.visible } : inst
       );
+      const nextConnections = recomputeSceneSnapConnections(
+        nextInstances,
+        getCatalogMap(state.scene.componentLibrary)
+      );
+      const synced = syncSceneTransportAndSignals({
+        instances: nextInstances,
+        componentLibrary: state.scene.componentLibrary,
+        snapConnections: nextConnections,
+        prevTransportGraph: state.scene.transportGraph,
+        prevTagMap: state.scene.plcTagMap,
+      });
+      runtimeBusClient.syncTagMap(synced.plcTagMap);
+
       return {
         isDirty: true,
         scene: {
           ...state.scene,
           instances: nextInstances,
-          snapConnections: recomputeSceneSnapConnections(
-            nextInstances,
-            getCatalogMap(state.scene.componentLibrary)
-          ),
+          snapConnections: nextConnections,
+          transportGraph: synced.transportGraph,
+          plcTagMap: synced.plcTagMap,
         },
       };
     }),
@@ -924,22 +1998,26 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     const nextInstances = [...state.scene.instances, duplicated];
     const catalogMap = getCatalogMap(state.scene.componentLibrary);
     const nextConnections = recomputeSceneSnapConnections(nextInstances, catalogMap);
-    const nextTagMap = syncPlcTagMapWithScene(
-      nextInstances,
-      state.scene.componentLibrary,
-      state.scene.plcTagMap
-    );
-    runtimeBusClient.syncTagMap(nextTagMap);
+    const synced = syncSceneTransportAndSignals({
+      instances: nextInstances,
+      componentLibrary: state.scene.componentLibrary,
+      snapConnections: nextConnections,
+      prevTransportGraph: state.scene.transportGraph,
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
 
     set({
       isDirty: true,
       selectedInstanceId: dupId,
       jogPreview: null,
+      isDrawingSplinePath: false,
       scene: {
         ...state.scene,
         instances: nextInstances,
         snapConnections: nextConnections,
-        plcTagMap: nextTagMap,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
       },
       statusMessage: `Duplicated "${target.name}" -> "${duplicated.name}"`,
     });
@@ -953,12 +2031,14 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       nextInstances,
       getCatalogMap(state.scene.componentLibrary)
     );
-    const nextTagMap = syncPlcTagMapWithScene(
-      nextInstances,
-      state.scene.componentLibrary,
-      state.scene.plcTagMap
-    );
-    runtimeBusClient.syncTagMap(nextTagMap);
+    const synced = syncSceneTransportAndSignals({
+      instances: nextInstances,
+      componentLibrary: state.scene.componentLibrary,
+      snapConnections: nextConnections,
+      prevTransportGraph: state.scene.transportGraph,
+      prevTagMap: state.scene.plcTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
 
     set({
       isDirty: true,
@@ -967,12 +2047,14 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       selectedSubMeshName:
         state.selectedInstanceId === instanceId ? null : state.selectedSubMeshName,
       jogPreview: null,
+      isDrawingSplinePath: false,
       activeSnapPreview: null,
       scene: {
         ...state.scene,
         instances: nextInstances,
         snapConnections: nextConnections,
-        plcTagMap: nextTagMap,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
       },
       statusMessage: removed ? `Deleted "${removed.name}"` : state.statusMessage,
     });
@@ -1002,15 +2084,26 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         };
       });
 
+      const nextConnections = recomputeSceneSnapConnections(
+        state.scene.instances,
+        getCatalogMap(nextLib)
+      );
+      const synced = syncSceneTransportAndSignals({
+        instances: state.scene.instances,
+        componentLibrary: nextLib,
+        snapConnections: nextConnections,
+        prevTransportGraph: state.scene.transportGraph,
+        prevTagMap: state.scene.plcTagMap,
+      });
+
       return {
         isDirty: true,
         scene: {
           ...state.scene,
           componentLibrary: nextLib,
-          snapConnections: recomputeSceneSnapConnections(
-            state.scene.instances,
-            getCatalogMap(nextLib)
-          ),
+          snapConnections: nextConnections,
+          transportGraph: synced.transportGraph,
+          plcTagMap: synced.plcTagMap,
         },
         statusMessage: `Added new ${role} to component.`,
       };
@@ -1028,15 +2121,26 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         };
       });
 
+      const nextConnections = recomputeSceneSnapConnections(
+        state.scene.instances,
+        getCatalogMap(nextLib)
+      );
+      const synced = syncSceneTransportAndSignals({
+        instances: state.scene.instances,
+        componentLibrary: nextLib,
+        snapConnections: nextConnections,
+        prevTransportGraph: state.scene.transportGraph,
+        prevTagMap: state.scene.plcTagMap,
+      });
+
       return {
         isDirty: true,
         scene: {
           ...state.scene,
           componentLibrary: nextLib,
-          snapConnections: recomputeSceneSnapConnections(
-            state.scene.instances,
-            getCatalogMap(nextLib)
-          ),
+          snapConnections: nextConnections,
+          transportGraph: synced.transportGraph,
+          plcTagMap: synced.plcTagMap,
         },
       };
     }),
@@ -1051,15 +2155,26 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         };
       });
 
+      const nextConnections = recomputeSceneSnapConnections(
+        state.scene.instances,
+        getCatalogMap(nextLib)
+      );
+      const synced = syncSceneTransportAndSignals({
+        instances: state.scene.instances,
+        componentLibrary: nextLib,
+        snapConnections: nextConnections,
+        prevTransportGraph: state.scene.transportGraph,
+        prevTagMap: state.scene.plcTagMap,
+      });
+
       return {
         isDirty: true,
         scene: {
           ...state.scene,
           componentLibrary: nextLib,
-          snapConnections: recomputeSceneSnapConnections(
-            state.scene.instances,
-            getCatalogMap(nextLib)
-          ),
+          snapConnections: nextConnections,
+          transportGraph: synced.transportGraph,
+          plcTagMap: synced.plcTagMap,
         },
       };
     }),

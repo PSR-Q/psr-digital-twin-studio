@@ -17,6 +17,7 @@ import type { ComponentDefinition, Vector3Tuple } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
 import { SceneInstanceMesh } from './SceneInstanceMesh';
 import { SnapPortIndicators } from './SnapPortIndicators';
+import { TransportFlowOverlay } from './TransportFlowOverlay';
 
 const GROUND_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const GRID_PLANE_ARGS: [number, number] = [40, 40];
@@ -235,6 +236,9 @@ export function ViewportCanvas() {
     [spawnInstance, importGlbBuffer, loadSceneFromJsonString, setStatusMessage]
   );
 
+  const isDrawingSplinePath = useEditorStore((s) => s.isDrawingSplinePath);
+  const setIsDrawingSplinePath = useEditorStore((s) => s.setIsDrawingSplinePath);
+
   return (
     <div
       id="vc-3d-viewport-container"
@@ -247,9 +251,12 @@ export function ViewportCanvas() {
         shadows
         dpr={[1, 2]}
         gl={{ antialias: true, powerPreference: 'high-performance' }}
-        camera={{ position: [4.6, 3.6, 5.4], fov: 44, near: 0.15, far: 160 }}
+        camera={{ position: [4.8, 3.8, 5.6], fov: 44, near: 0.15, far: 160 }}
         onPointerMissed={(e) => {
-          if (e.type === 'click') selectInstance(null);
+          if (e.type === 'click') {
+            if (useEditorStore.getState().isDrawingSplinePath) return;
+            selectInstance(null);
+          }
         }}
       >
         <color attach="background" args={['#0c1017']} />
@@ -277,6 +284,7 @@ export function ViewportCanvas() {
         <DropRaycasterBridge bridgeRef={raycastDropRef} />
         <SceneFloor />
         <SceneInstancesLayer />
+        <TransportFlowOverlay />
         <SnapPortIndicators />
         <CameraOrbitController />
 
@@ -291,9 +299,19 @@ export function ViewportCanvas() {
       {/* Viewport HUD Overlay */}
       <div className="vc-viewport-hud-top-left">
         <span className="vc-hud-pill">PERSPECTIVE · Y-UP · METRIC (m)</span>
-        <span className="vc-hud-pill vc-hud-pill-muted">
-          Click Select · Double-Click Part = Axis Builder · Drop .GLB / OpenUSD Anywhere
-        </span>
+        {isDrawingSplinePath ? (
+          <button
+            type="button"
+            className="vc-hud-pill vc-hud-draw-active"
+            onClick={() => setIsDrawingSplinePath(false)}
+          >
+            SPLINE DRAW ACTIVE — Click Belt to Add Waypoints · Click Here or Esc to Done
+          </button>
+        ) : (
+          <span className="vc-hud-pill vc-hud-pill-muted">
+            Space = Play/Pause · Click = Select · Double-Click Part = Axis Builder
+          </span>
+        )}
       </div>
 
       {/* Drag-and-Drop Visual Target Overlay */}

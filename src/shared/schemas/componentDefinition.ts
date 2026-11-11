@@ -188,6 +188,7 @@ export interface ComponentSignalDescriptor {
   minVal?: number;
   maxVal?: number;
   defaultVal?: number;
+  defaultBool?: boolean;
   description?: string;
 }
 

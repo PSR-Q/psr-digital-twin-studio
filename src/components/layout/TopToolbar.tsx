@@ -12,6 +12,7 @@ import {
   Play,
   RotateCcw,
   RotateCw,
+  Route,
   Save,
   Sparkles,
   Zap,
@@ -67,7 +68,7 @@ export function TopToolbar() {
         <div className="vc-brand-mark" title="Standalone 3D Industrial Virtual Commissioning">
           <Box size={16} />
           <span className="vc-brand-title">VC TWIN</span>
-          <span className="vc-milestone-tag">M2</span>
+          <span className="vc-milestone-tag">M3</span>
         </div>
 
         <div className="vc-scene-title-wrap">
@@ -205,6 +206,20 @@ export function TopToolbar() {
           />
           <span className="vc-micro-unit">m</span>
         </div>
+
+        <button
+          id="btn-toggle-transport-paths"
+          type="button"
+          className={`vc-icon-toggle ${env.showTransportPaths !== false ? 'active' : ''}`}
+          onClick={() =>
+            updateEnvironment({
+              showTransportPaths: !(env.showTransportPaths !== false),
+            })
+          }
+          title="Toggle 3D Conveyor Spline Paths & Laser Beams"
+        >
+          <Route size={14} />
+        </button>
 
         <button
           id="btn-toggle-grid"

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { runtimeBusClient } from '../../engine/runtimeBusClient';
+import { collectInstanceAllSignals } from '../../engine/signalCatalogSync';
 import type {
   ComponentDefinition,
   ComponentSignalDescriptor,
@@ -38,6 +39,7 @@ export function SignalForcePanel() {
   const selectedInstanceId = useEditorStore((s) => s.selectedInstanceId);
   const instances = useEditorStore((s) => s.scene.instances);
   const library = useEditorStore((s) => s.scene.componentLibrary);
+  const transportGraph = useEditorStore((s) => s.scene.transportGraph);
   const bindings = useEditorStore((s) => s.scene.plcTagMap.bindings);
   const runState = useEditorStore((s) => s.runState);
 
@@ -84,7 +86,12 @@ export function SignalForcePanel() {
       const comp = compMap.get(inst.componentId);
       if (!comp) continue;
 
-      const descByKey = new Map(comp.exposedSignals.map((s) => [s.key, s]));
+      const allSignals = collectInstanceAllSignals(
+        inst.id,
+        comp,
+        transportGraph
+      );
+      const descByKey = new Map(allSignals.map((s) => [s.key, s]));
       const instBindings = bindings.filter((b) => b.instanceId === inst.id);
       if (instBindings.length === 0) continue;
 
@@ -110,7 +117,14 @@ export function SignalForcePanel() {
     }
 
     return result;
-  }, [bindings, effectiveScope, instances, library, selectedInstanceId]);
+  }, [
+    bindings,
+    effectiveScope,
+    instances,
+    library,
+    selectedInstanceId,
+    transportGraph,
+  ]);
 
   const shortSignalLabel = (
     binding: PlcTagBinding,
@@ -435,6 +449,13 @@ export function SignalForcePanel() {
                     }
 
                     const numFeedback = Number(val ?? 0);
+                    const isIntType =
+                      binding.dataType === 'DINT32' ||
+                      binding.dataType === 'INT16';
+                    const formattedNum = isIntType
+                      ? Math.round(numFeedback).toLocaleString()
+                      : numFeedback.toFixed(1);
+
                     return (
                       <div key={binding.id} className="vc-feedback-row">
                         <div className="vc-force-sig-meta">
@@ -447,9 +468,20 @@ export function SignalForcePanel() {
                         </div>
 
                         <div className="vc-feedback-num-readout vc-mono-text">
+                          <span
+                            className={`vc-dtype-pill ${
+                              isIntType ? 'dint' : 'real'
+                            }`}
+                          >
+                            {binding.dataType === 'DINT32'
+                              ? 'DINT'
+                              : binding.dataType === 'INT16'
+                                ? 'INT'
+                                : 'REAL'}
+                          </span>
                           <Activity size={11} className="vc-cyan-text" />
                           <span>
-                            {numFeedback.toFixed(1)}
+                            {formattedNum}
                             {descriptor?.unit ? ` ${descriptor.unit}` : ''}
                           </span>
                         </div>

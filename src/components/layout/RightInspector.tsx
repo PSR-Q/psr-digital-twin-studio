@@ -3,6 +3,7 @@ import {
   Link2,
   Magnet,
   Plus,
+  Route,
   Sliders,
   Trash2,
   Wrench,
@@ -13,6 +14,7 @@ import type { SnapPortDefinition, Vector3Tuple } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
 import { ComponentBuilderPanel } from '../inspector/ComponentBuilderPanel';
 import { SignalForcePanel } from '../inspector/SignalForcePanel';
+import { TransportBuilderPanel } from '../inspector/TransportBuilderPanel';
 
 const NORMAL_PRESETS: Array<{ label: string; vec: Vector3Tuple }> = [
   { label: '-X (Left)', vec: [-1, 0, 0] },
@@ -142,13 +144,14 @@ export function RightInspector() {
         )}
       </div>
 
-      {/* 3-Mode Inspector Tabs (Always Accessible) */}
+      {/* 4-Mode Inspector Tabs (Always Accessible) */}
       <div className="vc-inspector-tabs">
         <button
           id="tab-inspector-transform"
           type="button"
           className={`vc-insp-tab ${inspectorTab === 'transform' ? 'active' : ''}`}
           onClick={() => setInspectorTab('transform')}
+          title="6-DOF Transform & SnapPorts"
         >
           <Magnet size={12} />
           <span>Layout</span>
@@ -158,28 +161,40 @@ export function RightInspector() {
           type="button"
           className={`vc-insp-tab ${inspectorTab === 'builder' ? 'active' : ''}`}
           onClick={() => setInspectorTab('builder')}
+          title="Kinematics Axis Builder (Linear / Rotary / VFX)"
         >
           <Wrench size={12} />
           <span>Builder</span>
+        </button>
+        <button
+          id="tab-inspector-flow"
+          type="button"
+          className={`vc-insp-tab ${inspectorTab === 'flow' ? 'active' : ''}`}
+          onClick={() => setInspectorTab('flow')}
+          title="Spline Conveyor Paths, Sensors & HSC Encoders"
+        >
+          <Route size={12} />
+          <span>Flow</span>
         </button>
         <button
           id="tab-inspector-signals"
           type="button"
           className={`vc-insp-tab ${inspectorTab === 'signals' ? 'active' : ''}`}
           onClick={() => setInspectorTab('signals')}
+          title="Signal Force Console (PLC I/O)"
         >
           <Zap
             size={12}
             className={activeForceCount > 0 ? 'vc-amber-text' : undefined}
           />
           <span>
-            Force I/O{activeForceCount > 0 ? ` (${activeForceCount})` : ''}
+            Force{activeForceCount > 0 ? ` (${activeForceCount})` : ''}
           </span>
         </button>
       </div>
 
       <div className="vc-inspector-scroll">
-        {/* Selected Machine Identity Header (shown in Layout & Builder modes when selected) */}
+        {/* Selected Machine Identity Header (shown in Layout, Builder & Flow modes when selected) */}
         {selectedInstance && selectedComponent && inspectorTab !== 'signals' && (
           <div className="vc-inspector-card">
             <label className="vc-field-label" htmlFor="input-instance-name">
@@ -205,9 +220,14 @@ export function RightInspector() {
           </div>
         )}
 
-        {/* TAB 3: SIGNAL FORCE CONSOLE (Works for Selected Machine OR All Scene!) */}
+        {/* TAB 4: SIGNAL FORCE CONSOLE (Works for Selected Machine OR All Scene!) */}
         {inspectorTab === 'signals' ? (
           <SignalForcePanel />
+        ) : inspectorTab === 'flow' ? (
+          <TransportBuilderPanel
+            instance={selectedInstance}
+            component={selectedComponent}
+          />
         ) : !selectedInstance || !selectedComponent ? (
           <>
             {inspectorTab === 'builder' && (

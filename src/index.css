@@ -863,7 +863,7 @@ body,
 /* Right Inspector */
 .vc-inspector-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   min-width: 0;
   border-bottom: 1px solid var(--vc-border);
   background: var(--vc-bg-input);
@@ -874,15 +874,15 @@ body,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
-  padding: 0 6px;
+  padding: 0 4px;
   height: 31px;
   border: none;
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--vc-text-muted);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -1876,6 +1876,252 @@ body,
   border: 1px solid var(--vc-border);
   font-size: 10.5px;
   color: var(--vc-text-primary);
+}
+
+/* Milestone 3: Spline Transport Path, Sensors & Virtual HSC Encoders */
+.vc-flow-stack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.vc-hud-draw-active {
+  pointer-events: auto;
+  cursor: pointer;
+  background: hsla(38, 92%, 16%, 0.94);
+  border-color: var(--vc-amber);
+  color: hsl(38, 98%, 74%);
+  font-weight: 700;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+
+.vc-hud-draw-active:hover {
+  background: hsla(38, 92%, 22%, 0.96);
+  color: #fff;
+}
+
+.vc-draw-banner-inline {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid hsla(38, 92%, 53%, 0.5);
+  background: var(--vc-amber-dim);
+  color: hsl(38, 95%, 76%);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.vc-flow-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin-bottom: 6px;
+}
+
+.vc-flow-kpi-box {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 5px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--vc-border);
+  background: var(--vc-bg-panel);
+}
+
+.vc-flow-kpi-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--vc-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vc-flow-kpi-box > strong {
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vc-spline-tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.vc-spline-tools-row .vc-yaw-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.vc-routing-badges {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vc-route-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 4px 7px;
+  border-radius: 4px;
+  font-family: var(--vc-font-mono);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vc-route-pill.in {
+  background: var(--vc-cyan-dim);
+  border: 1px solid hsla(192, 86%, 53%, 0.35);
+  color: var(--vc-cyan);
+}
+
+.vc-route-pill.out {
+  background: var(--vc-emerald-dim);
+  border: 1px solid hsla(156, 74%, 45%, 0.35);
+  color: var(--vc-emerald);
+}
+
+.vc-waypoint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 186px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.vc-waypoint-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.vc-wp-index {
+  flex-shrink: 0;
+  width: 20px;
+  font-size: 10px;
+  color: var(--vc-cyan);
+  font-weight: 700;
+}
+
+.vc-wp-grid {
+  flex: 1;
+  min-width: 0;
+}
+
+.vc-role-segmented.vc-three-seg {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.vc-encoder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.vc-encoder-card {
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--vc-border);
+  background: var(--vc-bg-panel);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vc-hsc-telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.vc-hsc-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 5px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--vc-border);
+  background: var(--vc-bg-input);
+}
+
+.vc-hsc-cell-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.vc-hsc-label {
+  font-size: 9.5px;
+  color: var(--vc-text-muted);
+}
+
+.vc-hsc-val {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--vc-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vc-hsc-val small {
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--vc-text-muted);
+}
+
+.vc-hsc-vel-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 6px;
+  border-radius: 3px;
+  background: var(--vc-bg-input);
+  border: 1px dashed var(--vc-border);
+  font-size: 10px;
+  color: var(--vc-text-secondary);
+}
+
+.vc-dtype-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 4px;
+  height: 14px;
+  border-radius: 2px;
+  font-family: var(--vc-font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.vc-dtype-pill.dint {
+  background: var(--vc-amber-dim);
+  color: var(--vc-amber);
+  border: 1px solid hsla(38, 92%, 53%, 0.35);
+}
+
+.vc-dtype-pill.real {
+  background: var(--vc-cyan-dim);
+  color: var(--vc-cyan);
+  border: 1px solid hsla(192, 86%, 53%, 0.35);
+}
+
+.vc-wide-num-input {
+  width: 96px;
 }
 
 @media (max-width: 1240px) {
