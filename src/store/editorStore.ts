@@ -487,7 +487,10 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
 
       return definition;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unsupported GLB/GLTF binary';
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Unsupported glTF (.glb/.gltf) or OpenUSD (.usd/.usda/.usdc/.usdz) file';
       set({ statusMessage: `Failed to import "${fileName}": ${msg}` });
       return null;
     }
@@ -512,7 +515,8 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     await new Promise<void>((resolve) => {
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = '.glb,.gltf,model/gltf-binary,model/gltf+json';
+      input.accept =
+        '.glb,.gltf,.usd,.usda,.usdc,.usdz,model/gltf-binary,model/gltf+json,model/vnd.usdz+zip,model/vnd.usd';
       input.onchange = async () => {
         const file = input.files?.[0];
         if (file) {

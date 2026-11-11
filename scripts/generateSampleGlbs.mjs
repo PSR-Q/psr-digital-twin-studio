@@ -504,6 +504,196 @@ function buildRotaryTurntableGlb() {
   });
 }
 
+async function buildCartesianGantryUsdz() {
+  const { zipSync } = await import(
+    '../node_modules/three/examples/jsm/libs/fflate.module.js'
+  );
+
+  const usdaStage = `#usda 1.0
+(
+    defaultPrim = "CartesianGantryCell"
+    doc = "PSR Digital Twin Studio — Sample OpenUSD (Z-Up, Metric) Industrial Pick & Place Portal"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "CartesianGantryCell"
+{
+    def Scope "Materials"
+    {
+        def Material "PortalSteelMat"
+        {
+            token outputs:surface.connect = </CartesianGantryCell/Materials/PortalSteelMat/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.19, 0.24, 0.31)
+                float inputs:metallic = 0.68
+                float inputs:roughness = 0.36
+                token outputs:surface
+            }
+        }
+        def Material "ServoCarriageCyanMat"
+        {
+            token outputs:surface.connect = </CartesianGantryCell/Materials/ServoCarriageCyanMat/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.08, 0.62, 0.78)
+                float inputs:metallic = 0.45
+                float inputs:roughness = 0.30
+                token outputs:surface
+            }
+        }
+        def Material "GripperAmberMat"
+        {
+            token outputs:surface.connect = </CartesianGantryCell/Materials/GripperAmberMat/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.92, 0.58, 0.08)
+                float inputs:metallic = 0.35
+                float inputs:roughness = 0.34
+                token outputs:surface
+            }
+        }
+    }
+
+    def Xform "Gantry_Portal_Frame"
+    {
+        def Cube "Portal_Leg_FL" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
+            double size = 1.0
+            double3 xformOp:translate = (-0.46, -0.44, 0.74)
+            double3 xformOp:scale = (0.08, 0.08, 1.48)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+        def Cube "Portal_Leg_FR" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
+            double size = 1.0
+            double3 xformOp:translate = (0.46, -0.44, 0.74)
+            double3 xformOp:scale = (0.08, 0.08, 1.48)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+        def Cube "Portal_Leg_BL" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
+            double size = 1.0
+            double3 xformOp:translate = (-0.46, 0.44, 0.74)
+            double3 xformOp:scale = (0.08, 0.08, 1.48)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+        def Cube "Portal_Leg_BR" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
+            double size = 1.0
+            double3 xformOp:translate = (0.46, 0.44, 0.74)
+            double3 xformOp:scale = (0.08, 0.08, 1.48)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+        def Cube "Side_Header_Front" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
+            double size = 1.0
+            double3 xformOp:translate = (0, -0.44, 1.49)
+            double3 xformOp:scale = (1.0, 0.09, 0.08)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+        def Cube "Side_Header_Back" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
+            double size = 1.0
+            double3 xformOp:translate = (0, 0.44, 1.49)
+            double3 xformOp:scale = (1.0, 0.09, 0.08)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+        def Cube "Overhead_Bridge_Beam" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
+            double size = 1.0
+            double3 xformOp:translate = (0, 0, 1.52)
+            double3 xformOp:scale = (0.22, 0.96, 0.10)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+    }
+
+    def Cube "Servo_Traverse_Carriage_Axis" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </CartesianGantryCell/Materials/ServoCarriageCyanMat>
+        double size = 1.0
+        double3 xformOp:translate = (0, 0, 1.41)
+        double3 xformOp:scale = (0.28, 0.26, 0.15)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def Cylinder "Vertical_Z_Mast_Axis" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </CartesianGantryCell/Materials/ServoCarriageCyanMat>
+        uniform token axis = "Z"
+        double height = 0.38
+        double radius = 0.045
+        double3 xformOp:translate = (0, 0, 1.18)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Cube "Vacuum_Gripper_Tool_Axis" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </CartesianGantryCell/Materials/GripperAmberMat>
+        double size = 1.0
+        double3 xformOp:translate = (0, 0, 0.97)
+        double3 xformOp:scale = (0.24, 0.20, 0.05)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def Cylinder "Safety_Beacon_Lamp" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </CartesianGantryCell/Materials/GripperAmberMat>
+        uniform token axis = "Z"
+        double height = 0.10
+        double radius = 0.036
+        double3 xformOp:translate = (0.46, -0.44, 1.58)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}
+`;
+
+  const usdzBytes = zipSync(
+    {
+      'cartesian_gantry_cell.usda': new TextEncoder().encode(usdaStage),
+    },
+    { level: 0 }
+  );
+  return Buffer.from(
+    usdzBytes.buffer,
+    usdzBytes.byteOffset,
+    usdzBytes.byteLength
+  );
+}
+
 async function copyThreeDecoders() {
   const threeLibs = path.resolve(
     __dirname,
@@ -541,6 +731,7 @@ async function main() {
     ['pneumatic-stopper.glb', buildPneumaticStopperGlb()],
     ['mixing-tank-agitator.glb', buildMixingTankGlb()],
     ['rotary-turntable.glb', buildRotaryTurntableGlb()],
+    ['cartesian-gantry-cell.usdz', await buildCartesianGantryUsdz()],
   ];
 
   for (const [filename, buf] of files) {

@@ -103,8 +103,21 @@ function registerIpcHandlers(): void {
     async (): Promise<OpenedGlbPayload | null> => {
       if (!mainWindow) return null;
       const result = await dialog.showOpenDialog(mainWindow, {
-        title: 'Import 3D Machine Model (.glb / .gltf)',
-        filters: [{ name: '3D GLTF Binary Models', extensions: ['glb', 'gltf'] }],
+        title: 'Import 3D Machine Model (glTF .glb/.gltf or OpenUSD .usd/.usda/.usdc/.usdz)',
+        filters: [
+          {
+            name: '3D Industrial Models (glTF & OpenUSD)',
+            extensions: ['glb', 'gltf', 'usd', 'usda', 'usdc', 'usdz'],
+          },
+          {
+            name: 'OpenUSD Stage / Package (.usd, .usda, .usdc, .usdz)',
+            extensions: ['usd', 'usda', 'usdc', 'usdz'],
+          },
+          {
+            name: 'glTF 2.0 Models (.glb, .gltf)',
+            extensions: ['glb', 'gltf'],
+          },
+        ],
         properties: ['openFile'],
       });
       if (result.canceled || result.filePaths.length === 0) return null;

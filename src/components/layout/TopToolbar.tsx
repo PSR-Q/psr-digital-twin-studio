@@ -106,10 +106,10 @@ export function TopToolbar() {
           type="button"
           className="vc-tool-btn vc-tool-btn-accent"
           onClick={() => void importGlbInteractive()}
-          title="Import .glb / .gltf 3D Model from Disk"
+          title="Import 3D Model (.glb, .gltf, .usd, .usda, .usdc, .usdz)"
         >
           <Download size={14} />
-          <span>Import .GLB</span>
+          <span>Import 3D (.GLB / .USD)</span>
         </button>
 
         <button

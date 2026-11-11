@@ -8,7 +8,10 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Upload } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import * as THREE from 'three';
-import { configureGlbRendererSupport } from '../../engine/glbAssetRegistry';
+import {
+  configureGlbRendererSupport,
+  isSupported3dModelFile,
+} from '../../engine/glbAssetRegistry';
 import { runtimeBusClient } from '../../engine/runtimeBusClient';
 import type { ComponentDefinition, Vector3Tuple } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
@@ -200,13 +203,13 @@ export function ViewportCanvas() {
         return;
       }
 
-      // Case 2: Dragged external .glb / .gltf or .json file from OS Desktop / Explorer
+      // Case 2: Dragged external 3D model (.glb/.gltf/.usd/.usda/.usdc/.usdz) or .json scene from OS
       const files = Array.from(e.dataTransfer.files);
       if (files.length === 0) return;
 
       for (const file of files) {
         const lower = file.name.toLowerCase();
-        if (lower.endsWith('.glb') || lower.endsWith('.gltf')) {
+        if (isSupported3dModelFile(file.name)) {
           const buffer = await file.arrayBuffer();
           await importGlbBuffer(file.name, buffer, {
             spawnInScene: true,
@@ -217,7 +220,7 @@ export function ViewportCanvas() {
           loadSceneFromJsonString(text, file.name);
         } else {
           setStatusMessage(
-            `Unsupported file "${file.name}". Drop a .glb/.gltf model or .json layout.`
+            `Unsupported file "${file.name}". Drop a .glb/.gltf, OpenUSD (.usd/.usda/.usdc/.usdz), or .json layout.`
           );
         }
       }
@@ -282,7 +285,7 @@ export function ViewportCanvas() {
       <div className="vc-viewport-hud-top-left">
         <span className="vc-hud-pill">PERSPECTIVE · Y-UP · METRIC (m)</span>
         <span className="vc-hud-pill vc-hud-pill-muted">
-          LMB Select/Gizmo · RMB Pan · Scroll Zoom · Drop .GLB Anywhere
+          LMB Select/Gizmo · RMB Pan · Scroll Zoom · Drop .GLB / OpenUSD Anywhere
         </span>
       </div>
 
@@ -293,10 +296,10 @@ export function ViewportCanvas() {
             <Upload size={28} />
             <div>
               <div className="vc-dropzone-title">
-                Drop 3D Machine (.glb / .gltf) or Scene (.json)
+                Drop 3D Machine (.glb / .gltf / OpenUSD .usd .usda .usdc .usdz) or Scene (.json)
               </div>
               <div className="vc-dropzone-sub">
-                Models automatically generate Input/Output SnapPorts and land on the 3D cursor floor point
+                glTF & OpenUSD stages (including Z-up & metric units) auto-generate Input/Output SnapPorts on the floor
               </div>
             </div>
           </div>

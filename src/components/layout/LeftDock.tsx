@@ -13,6 +13,10 @@ import {
   Unlock,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import {
+  detectModelFormat,
+  isUsdFormat,
+} from '../../engine/glbAssetRegistry';
 import type { ComponentCategory } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
 
@@ -21,7 +25,7 @@ const CATEGORY_FILTERS: Array<{ key: 'ALL' | ComponentCategory; label: string }>
   { key: 'Conveyors', label: 'Conveyors' },
   { key: 'Actuators', label: 'Actuators' },
   { key: 'ProcessEquipment', label: 'Process' },
-  { key: 'CustomGlb', label: 'Imported .GLB' },
+  { key: 'CustomGlb', label: 'Imported 3D' },
 ];
 
 export function LeftDock() {
@@ -56,22 +60,22 @@ export function LeftDock() {
 
   return (
     <aside id="vc-left-dock" className="vc-left-dock">
-      {/* Upper Pane: 3D .GLB Component Catalog */}
+      {/* Upper Pane: 3D .GLB & OpenUSD Component Catalog */}
       <section className="vc-dock-pane vc-catalog-pane">
         <div className="vc-pane-header">
           <div className="vc-pane-title">
             <Cuboid size={14} />
-            <span>ASSET CATALOG (.GLB)</span>
+            <span>ASSET CATALOG (.GLB / .USD)</span>
           </div>
           <button
             id="btn-catalog-import-glb"
             type="button"
             className="vc-mini-action-btn"
             onClick={() => void importGlbInteractive()}
-            title="Import .glb/.gltf model into Component Library"
+            title="Import .glb, .gltf, or OpenUSD (.usd, .usda, .usdc, .usdz) into Component Library"
           >
             <Download size={12} />
-            <span>+ .GLB</span>
+            <span>+ Import</span>
           </button>
         </div>
 
@@ -94,6 +98,10 @@ export function LeftDock() {
         <div className="vc-catalog-list">
           {filteredCatalog.map((comp) => {
             const [sx, sy, sz] = comp.boundingBox.size;
+            const fmt =
+              comp.modelSource.format ??
+              detectModelFormat(comp.modelSource.fileName || comp.modelSource.uri);
+            const usdBadge = isUsdFormat(fmt);
             return (
               <div
                 key={comp.id}
@@ -109,6 +117,11 @@ export function LeftDock() {
                   <div>
                     <div className="vc-catalog-name">{comp.name}</div>
                     <div className="vc-catalog-meta">
+                      <span
+                        className={`vc-format-pill ${usdBadge ? 'usd' : 'glb'}`}
+                      >
+                        {fmt.toUpperCase()}
+                      </span>{' '}
                       {sx.toFixed(2)}×{sy.toFixed(2)}×{sz.toFixed(2)}m ·{' '}
                       <span className="vc-port-count-highlight">
                         {comp.snapPorts.length} Ports
@@ -123,7 +136,7 @@ export function LeftDock() {
                         href={comp.modelSource.uri}
                         download={comp.modelSource.fileName}
                         className="vc-icon-btn"
-                        title={`Download ${comp.modelSource.fileName} to test dragging external .glb`}
+                        title={`Download ${comp.modelSource.fileName} to test dragging external ${fmt.toUpperCase()} file`}
                         onClick={(e) => e.stopPropagation()}
                       >
                         <FileDown size={13} />

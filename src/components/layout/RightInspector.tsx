@@ -209,7 +209,7 @@ export function RightInspector() {
           onClick={() => setActiveTab('hierarchy')}
         >
           <GitBranch size={13} />
-          <span>GLB Nodes & I/O</span>
+          <span>3D Nodes & I/O</span>
         </button>
       </div>
 
@@ -465,7 +465,7 @@ export function RightInspector() {
             {/* Sub-Mesh Hierarchy & Milestone 2-4 Schema Preview */}
             <div className="vc-inspector-card">
               <div className="vc-section-label">
-                DISCOVERED .GLB SUB-MESH NODES (
+                DISCOVERED 3D SUB-MESH NODES (
                 {Object.keys(selectedComponent.nodeRoles).length})
               </div>
               <div className="vc-node-role-list">

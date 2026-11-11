@@ -2,6 +2,7 @@ import { TransformControls } from '@react-three/drei';
 import type { ThreeEvent } from '@react-three/fiber';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { clone as cloneSceneWithSkeletons } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { loadComponentGlbAsset } from '../../engine/glbAssetRegistry';
 import {
   eulerDegToQuaternion,
@@ -37,17 +38,17 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
 
   const isSelected = selectedInstanceId === instance.id;
 
-  // Load binary .glb and clone scene graph for this instance
+  // Load binary .glb / OpenUSD (.usd/.usda/.usdc/.usdz) and clone scene graph (including SkinnedMesh rigs)
   useEffect(() => {
     let cancelled = false;
     loadComponentGlbAsset(component)
       .then((asset) => {
         if (cancelled) return;
-        const cloned = asset.sceneTemplate.clone(true);
+        const cloned = cloneSceneWithSkeletons(asset.sceneTemplate) as THREE.Group;
         setClonedModel(cloned);
       })
       .catch((err) => {
-        console.error(`[Viewport] Failed to load GLB for ${component.name}:`, err);
+        console.error(`[Viewport] Failed to load 3D model for ${component.name}:`, err);
       });
 
     return () => {

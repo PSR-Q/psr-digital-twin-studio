@@ -2,7 +2,7 @@ import type { BoundingBoxData, UUID, Vector3Tuple } from './common';
 
 /**
  * Asset Pipeline & Custom Component Builder Schema (.vcomp.json)
- * Defines reusable 3D machine components imported from .glb/.gltf files.
+ * Defines reusable 3D machine components imported from glTF (.glb/.gltf) or OpenUSD (.usd/.usda/.usdc/.usdz) files.
  */
 
 export type ComponentCategory =
@@ -12,12 +12,16 @@ export type ComponentCategory =
   | 'SensorsAndStops'
   | 'CustomGlb';
 
+export type ModelFormat = 'glb' | 'gltf' | 'usd' | 'usda' | 'usdc' | 'usdz';
+
 export interface ModelSourceSpec {
-  kind: 'builtin' | 'embedded-glb' | 'local-file';
+  kind: 'builtin' | 'embedded-glb' | 'embedded-usd' | 'local-file';
   /** Built-in asset path (e.g. ./sample-models/belt-conveyor-2m.glb) or file URI */
   uri: string;
   fileName: string;
-  /** Optional portable Base64-encoded .glb payload for zero-dependency JSON Scene sharing */
+  /** Optional explicit 3D asset format ('glb' | 'gltf' | 'usd' | 'usda' | 'usdc' | 'usdz') */
+  format?: ModelFormat;
+  /** Optional portable Base64-encoded 3D payload (.glb/.gltf/.usd/.usda/.usdc/.usdz) for zero-dependency JSON Scene sharing */
   embeddedBase64?: string;
   byteLength?: number;
 }

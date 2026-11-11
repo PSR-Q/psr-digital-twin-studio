@@ -551,10 +551,36 @@ body,
 }
 
 .vc-catalog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
   font-size: 10.5px;
   font-family: var(--vc-font-mono);
   color: var(--vc-text-muted);
-  margin-top: 2px;
+  margin-top: 3px;
+}
+
+.vc-format-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 4px;
+  height: 15px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.vc-format-pill.glb {
+  background: var(--vc-cyan-dim);
+  color: var(--vc-cyan);
+}
+
+.vc-format-pill.usd {
+  background: var(--vc-emerald-dim);
+  color: var(--vc-emerald);
+  border: 1px solid hsla(156, 74%, 45%, 0.35);
 }
 
 .vc-port-count-highlight {
