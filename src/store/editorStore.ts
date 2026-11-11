@@ -27,6 +27,10 @@ import {
   syncSceneTransportAndSignals,
 } from '../engine/transportGraphSync';
 import {
+  computeWorkpieceDimensionsFromComponent,
+  getWorkpiecePresetById,
+} from '../engine/workpieceCatalog';
+import {
   createEmptySceneSchema,
   createEmptyTransportGraph,
   isValidSceneSchema,
@@ -50,7 +54,12 @@ import {
   type UUID,
   type Vector3Tuple,
   type VirtualEncoderConfig,
+  type WorkpieceShapeType,
 } from '../shared/schemas';
+
+export type WorkpieceDropSource =
+  | { kind: 'preset'; presetId: string }
+  | { kind: 'component'; componentId: UUID };
 
 export type GizmoTransformMode = 'translate' | 'rotate' | 'scale';
 export type InspectorTabMode =
@@ -367,6 +376,15 @@ export interface EditorStoreState {
     patch: Partial<PartSourceRuntimeConfig>
   ) => void;
   triggerManualSpawnNow: (instanceId: UUID) => void;
+  dropWorkpieceByRay: (
+    rayOrigin: Vector3Tuple,
+    rayDirection: Vector3Tuple,
+    source: WorkpieceDropSource
+  ) => boolean;
+  dropWorkpieceQuick: (
+    source: WorkpieceDropSource,
+    targetInstanceId?: UUID
+  ) => boolean;
   clearAllActiveFlowItems: () => void;
 
   addInstancePathSensor: (
@@ -1241,6 +1259,187 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       runState: nextRunState,
       statusMessage: `Spawned workpiece #${spawned.serialNumber} (${spawned.dimensionsMm.join('×')} mm).`,
     });
+  },
+
+  dropWorkpieceByRay: (rayOrigin, rayDirection, source) => {
+    const state = get();
+    let shape: WorkpieceShapeType = 'carton';
+    let dimensionsMm: Vector3Tuple = [280, 220, 160];
+    let colorHex = '#0ea5e9';
+    let label = 'Carton Box';
+    let customComponentId: UUID | undefined;
+
+    if (source.kind === 'preset') {
+      const preset = getWorkpiecePresetById(source.presetId);
+      if (!preset) return false;
+      shape = preset.shape;
+      dimensionsMm = [...preset.dimensionsMm] as Vector3Tuple;
+      colorHex = preset.colorHex;
+      label = preset.name;
+    } else {
+      const comp = state.scene.componentLibrary.find(
+        (c) => c.id === source.componentId
+      );
+      if (!comp) return false;
+      shape = 'custom-model';
+      customComponentId = comp.id;
+      dimensionsMm = computeWorkpieceDimensionsFromComponent(comp);
+      colorHex = '#38bdf8';
+      label = comp.name;
+    }
+
+    const hit = transportRuntime.findClosestBeltPointFromRay({
+      rayOrigin,
+      rayDirection,
+      graph: state.scene.transportGraph,
+      instances: state.scene.instances,
+      componentLibrary: state.scene.componentLibrary,
+      bindings: state.scene.plcTagMap.bindings,
+      bufferView: runtimeBusClient.bufferView,
+      maxCaptureRadiusMeters: 0.92,
+    });
+
+    if (!hit) {
+      set({
+        statusMessage:
+          'Missed conveyor belt — drag the workpiece onto any cyan Conveyor Spline path, or click "+ On Belt".',
+      });
+      return false;
+    }
+
+    const placed = transportRuntime.placeWorkpieceOnPath({
+      graph: state.scene.transportGraph,
+      instances: state.scene.instances,
+      componentLibrary: state.scene.componentLibrary,
+      bindings: state.scene.plcTagMap.bindings,
+      bufferView: runtimeBusClient.bufferView,
+      pathNodeId: hit.pathNodeId,
+      distanceMm: hit.distanceMm,
+      shape,
+      dimensionsMm,
+      colorHex,
+      customComponentId,
+    });
+
+    if (!placed) {
+      set({
+        statusMessage: 'Selected conveyor belt is completely full — clear or run the line.',
+      });
+      return false;
+    }
+
+    // Immediately push updated PE/PX sensor states to PLC worker even if STOPPED/PAUSED!
+    runtimeBusClient.pushSimInputsToWorker();
+
+    const instName =
+      state.scene.instances.find((i) => i.id === hit.instanceId)?.name ??
+      hit.instanceId;
+
+    set({
+      statusMessage:
+        state.runState === 'RUNNING'
+          ? `Dropped ${label} (#${placed.serialNumber}) onto ${instName} @ ${Math.round(placed.distanceMm)} mm — flowing!`
+          : `Staged ${label} (#${placed.serialNumber}) on ${instName} @ ${Math.round(placed.distanceMm)} mm (Sensors active! Press Play / Space to run belt).`,
+    });
+    return true;
+  },
+
+  dropWorkpieceQuick: (source, targetInstanceId) => {
+    const state = get();
+    const graph = state.scene.transportGraph;
+    const allNodes = Object.values(graph.nodes);
+    if (allNodes.length === 0) {
+      set({
+        statusMessage:
+          'No Conveyor Spline Path in scene yet — add a Conveyor or generate a Spline Path first.',
+      });
+      return false;
+    }
+
+    let shape: WorkpieceShapeType = 'carton';
+    let dimensionsMm: Vector3Tuple = [280, 220, 160];
+    let colorHex = '#0ea5e9';
+    let label = 'Carton Box';
+    let customComponentId: UUID | undefined;
+
+    if (source.kind === 'preset') {
+      const preset = getWorkpiecePresetById(source.presetId);
+      if (!preset) return false;
+      shape = preset.shape;
+      dimensionsMm = [...preset.dimensionsMm] as Vector3Tuple;
+      colorHex = preset.colorHex;
+      label = preset.name;
+    } else {
+      const comp = state.scene.componentLibrary.find(
+        (c) => c.id === source.componentId
+      );
+      if (!comp) return false;
+      shape = 'custom-model';
+      customComponentId = comp.id;
+      dimensionsMm = computeWorkpieceDimensionsFromComponent(comp);
+      colorHex = '#38bdf8';
+      label = comp.name;
+    }
+
+    const desiredInstId = targetInstanceId ?? state.selectedInstanceId;
+    const selectedNode = desiredInstId
+      ? allNodes.find((n) => n.instanceId === desiredInstId && n.arcLengthMm >= 250) ??
+        allNodes.find((n) => n.instanceId === desiredInstId)
+      : undefined;
+
+    const spawnerNode = graph.spawners[0]
+      ? graph.nodes[graph.spawners[0].targetPathNodeId]
+      : undefined;
+
+    const targetNode = selectedNode ?? spawnerNode ?? allNodes[0];
+    if (!targetNode) return false;
+
+    const startOffsetMm = Math.min(
+      targetNode.arcLengthMm * 0.25,
+      dimensionsMm[0] * 0.5 + 45
+    );
+
+    const placed = transportRuntime.placeWorkpieceOnPath({
+      graph,
+      instances: state.scene.instances,
+      componentLibrary: state.scene.componentLibrary,
+      bindings: state.scene.plcTagMap.bindings,
+      bufferView: runtimeBusClient.bufferView,
+      pathNodeId: targetNode.id,
+      distanceMm: startOffsetMm,
+      shape,
+      dimensionsMm,
+      colorHex,
+      customComponentId,
+    });
+
+    if (!placed) {
+      set({
+        statusMessage: 'Target conveyor belt is currently full — run or clear parts.',
+      });
+      return false;
+    }
+
+    runtimeBusClient.pushSimInputsToWorker();
+
+    let nextRunState = state.runState;
+    if (state.runState === 'STOPPED') {
+      nextRunState = 'RUNNING';
+      runtimeBusClient.sendControl(
+        'RUNNING',
+        state.scene.environment.simSpeedMultiplier
+      );
+    }
+
+    const instName =
+      state.scene.instances.find((i) => i.id === targetNode.instanceId)?.name ??
+      targetNode.instanceId;
+
+    set({
+      runState: nextRunState,
+      statusMessage: `Fed ${label} (#${placed.serialNumber}, ${dimensionsMm.join('×')} mm) onto ${instName}.`,
+    });
+    return true;
   },
 
   clearAllActiveFlowItems: () => {

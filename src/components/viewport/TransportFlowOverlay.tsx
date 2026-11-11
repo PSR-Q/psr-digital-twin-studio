@@ -1,6 +1,7 @@
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { loadComponentGlbAsset } from '../../engine/glbAssetRegistry';
 import { runtimeBusClient } from '../../engine/runtimeBusClient';
 import { eulerDegToQuaternion } from '../../engine/snapEngine';
 import {
@@ -14,6 +15,7 @@ import type {
   TransportPathNode,
   UUID,
   Vector3Tuple,
+  WorkpieceShapeType,
 } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
 
@@ -181,11 +183,24 @@ export const TransportFlowOverlay = memo(function TransportFlowOverlay() {
   const isDrawingSplinePath = useEditorStore((s) => s.isDrawingSplinePath);
   const appendSplineWaypointWorld = useEditorStore((s) => s.appendSplineWaypointWorld);
 
-  // Pool of 96 3D Carton/Tote Workpieces updated imperatively in useFrame (0 React re-renders!)
+  // Pool of 96 3D Multi-Shape Workpieces (Carton, Pallet, Tote, Cylinder, Plate, Custom GLB/USD)
   const itemGroupRefs = useRef<Array<THREE.Group | null>>([]);
-  const itemBodyMatRefs = useRef<Array<THREE.MeshStandardMaterial | null>>([]);
-  const itemBandMatRefs = useRef<Array<THREE.MeshStandardMaterial | null>>([]);
+  const slotShapeGroups = useRef<
+    Array<Partial<Record<WorkpieceShapeType, THREE.Group | null>>>
+  >([]);
+  const slotCustomMounts = useRef<Array<THREE.Group | null>>([]);
   const lastColorHexBySlot = useRef<string[]>([]);
+  const lastShapeKeyBySlot = useRef<string[]>([]);
+  const lastMountedCustomIdBySlot = useRef<string[]>([]);
+
+  // Cached normalized 1x1x1 THREE.Group templates for custom .glb / .usd workpieces
+  const customTemplateMapRef = useRef<Map<UUID, THREE.Group>>(new Map());
+  const loadingCustomSetRef = useRef<Set<UUID>>(new Set());
+
+  // Live 3D Conveyor Drop Ghost Preview refs (0 React re-renders during HTML5 dragover!)
+  const dropGhostGroupRef = useRef<THREE.Group | null>(null);
+  const dropGhostBoxRef = useRef<THREE.Mesh | null>(null);
+  const dropGhostMatRef = useRef<THREE.MeshBasicMaterial | null>(null);
 
   // Live Sensor Laser Beam & LED material refs for zero-React-render high-speed flash
   const sensorBeamMatRefs = useRef<Map<UUID, THREE.MeshBasicMaterial>>(new Map());
@@ -198,25 +213,93 @@ export const TransportFlowOverlay = memo(function TransportFlowOverlay() {
   // Shared static geometries for pooled workpieces & overlays
   const sharedGeoms = useMemo(() => {
     const box = new THREE.BoxGeometry(1, 1, 1);
-    const label = new THREE.BoxGeometry(0.46, 0.015, 0.52);
-    const band = new THREE.BoxGeometry(1.015, 0.14, 1.015);
+    const label = new THREE.BoxGeometry(0.46, 0.016, 0.52);
+    const band = new THREE.BoxGeometry(1.02, 0.14, 1.02);
+    const cylBody = new THREE.CylinderGeometry(0.47, 0.47, 0.88, 20);
+    const cylCap = new THREE.CylinderGeometry(0.27, 0.31, 0.14, 16);
+    const cylCollar = new THREE.CylinderGeometry(0.49, 0.49, 0.15, 20);
     const cone = new THREE.ConeGeometry(0.024, 0.068, 12);
     const wpSphere = new THREE.SphereGeometry(0.028, 14, 14);
     const edgeTorus = new THREE.TorusGeometry(0.052, 0.008, 10, 24);
     edgeTorus.rotateY(Math.PI / 2);
-    return { box, label, band, cone, wpSphere, edgeTorus };
+    const ghostRing = new THREE.RingGeometry(0.14, 0.19, 28);
+    return {
+      box,
+      label,
+      band,
+      cylBody,
+      cylCap,
+      cylCollar,
+      cone,
+      wpSphere,
+      edgeTorus,
+      ghostRing,
+    };
   }, []);
+
+  const slotMaterials = useMemo(
+    () =>
+      Array.from({ length: MAX_POOLED_FLOW_ITEMS }, () => ({
+        body: new THREE.MeshStandardMaterial({
+          color: '#0ea5e9',
+          roughness: 0.44,
+          metalness: 0.14,
+        }),
+        band: new THREE.MeshStandardMaterial({
+          color: '#1e293b',
+          emissive: '#0ea5e9',
+          emissiveIntensity: 0.22,
+          roughness: 0.35,
+        }),
+      })),
+    []
+  );
+
+  const accentMaterials = useMemo(
+    () => ({
+      labelWhite: new THREE.MeshStandardMaterial({
+        color: '#f8fafc',
+        roughness: 0.65,
+      }),
+      kraftTape: new THREE.MeshStandardMaterial({
+        color: '#fde68a',
+        roughness: 0.55,
+      }),
+      woodDeck: new THREE.MeshStandardMaterial({
+        color: '#b45309',
+        roughness: 0.72,
+      }),
+      woodRunner: new THREE.MeshStandardMaterial({
+        color: '#78350f',
+        roughness: 0.78,
+      }),
+      darkCavity: new THREE.MeshStandardMaterial({
+        color: '#090d16',
+        roughness: 0.85,
+      }),
+      steelBright: new THREE.MeshStandardMaterial({
+        color: '#e2e8f0',
+        metalness: 0.72,
+        roughness: 0.24,
+      }),
+    }),
+    []
+  );
 
   useEffect(() => {
     return () => {
-      sharedGeoms.box.dispose();
-      sharedGeoms.label.dispose();
-      sharedGeoms.band.dispose();
-      sharedGeoms.cone.dispose();
-      sharedGeoms.wpSphere.dispose();
-      sharedGeoms.edgeTorus.dispose();
+      for (const g of Object.values(sharedGeoms)) {
+        g.dispose();
+      }
+      for (const pair of slotMaterials) {
+        pair.body.dispose();
+        pair.band.dispose();
+      }
+      for (const m of Object.values(accentMaterials)) {
+        m.dispose();
+      }
     };
-  }, [sharedGeoms]);
+  }, [accentMaterials, sharedGeoms, slotMaterials]);
 
   const instMap = useMemo(
     () => new Map<UUID, SceneNodeInstance>(instances.map((i) => [i.id, i])),
@@ -368,6 +451,48 @@ export const TransportFlowOverlay = memo(function TransportFlowOverlay() {
     };
   }, [compMap, instMap, isDrawingSplinePath, selectedInstanceId]);
 
+  const ensureCustomWorkpieceTemplate = (compId: UUID) => {
+    if (
+      customTemplateMapRef.current.has(compId) ||
+      loadingCustomSetRef.current.has(compId)
+    ) {
+      return;
+    }
+    const comp = compMap.get(compId);
+    if (!comp) return;
+
+    loadingCustomSetRef.current.add(compId);
+    void loadComponentGlbAsset(comp)
+      .then((parsed) => {
+        const cloned = parsed.sceneTemplate.clone(true);
+        cloned.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(cloned);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+
+        cloned.position.set(
+          cloned.position.x - center.x,
+          cloned.position.y - center.y,
+          cloned.position.z - center.z
+        );
+
+        const unitWrapper = new THREE.Group();
+        unitWrapper.scale.set(
+          1 / Math.max(0.02, size.x),
+          1 / Math.max(0.02, size.y),
+          1 / Math.max(0.02, size.z)
+        );
+        unitWrapper.add(cloned);
+        customTemplateMapRef.current.set(compId, unitWrapper);
+      })
+      .catch(() => {
+        // Fallback to carton visual if asset cannot be parsed
+      })
+      .finally(() => {
+        loadingCustomSetRef.current.delete(compId);
+      });
+  };
+
   // 60-144Hz Deterministic Material Flow, Sensor & HSC Encoder Loop (Zero React Re-renders)
   useFrame((_, delta) => {
     const store = useEditorStore.getState();
@@ -382,7 +507,7 @@ export const TransportFlowOverlay = memo(function TransportFlowOverlay() {
       rawDeltaSec: delta,
     });
 
-    // Update pooled 3D FlowItems
+    // Update pooled 3D Multi-Shape FlowItems
     const activeItems = transportRuntime.getFlowItems();
     const visibleCount = Math.min(MAX_POOLED_FLOW_ITEMS, activeItems.length);
 
@@ -404,32 +529,121 @@ export const TransportFlowOverlay = memo(function TransportFlowOverlay() {
 
       sampleWorldPathPose(lut, item.distanceMm, _samplePos, _sampleQuat, _sampleTan);
 
-      const lenM = Math.max(0.06, item.dimensionsMm[0] * 0.001);
-      const widM = Math.max(0.06, item.dimensionsMm[1] * 0.001);
-      const hgtM = Math.max(0.04, item.dimensionsMm[2] * 0.001);
+      const lenM = Math.max(0.05, item.dimensionsMm[0] * 0.001);
+      const widM = Math.max(0.05, item.dimensionsMm[1] * 0.001);
+      const hgtM = Math.max(0.03, item.dimensionsMm[2] * 0.001);
 
       grp.visible = true;
       grp.position.set(_samplePos.x, _samplePos.y + hgtM * 0.5 + 0.004, _samplePos.z);
       grp.quaternion.copy(_sampleQuat);
       grp.scale.set(lenM, hgtM, widM);
 
-      const bodyMat = itemBodyMatRefs.current[i];
-      if (bodyMat && lastColorHexBySlot.current[i] !== item.colorHex) {
-        bodyMat.color.set(item.colorHex);
-        lastColorHexBySlot.current[i] = item.colorHex;
+      const requestedShape: WorkpieceShapeType = item.shape ?? 'carton';
+      let effectiveShape: WorkpieceShapeType = requestedShape;
+
+      if (requestedShape === 'custom-model' && item.customComponentId) {
+        const readyTpl = customTemplateMapRef.current.get(item.customComponentId);
+        if (readyTpl) {
+          const customMount = slotCustomMounts.current[i];
+          if (
+            customMount &&
+            lastMountedCustomIdBySlot.current[i] !== item.customComponentId
+          ) {
+            customMount.clear();
+            customMount.add(readyTpl.clone(true));
+            lastMountedCustomIdBySlot.current[i] = item.customComponentId;
+          }
+        } else {
+          ensureCustomWorkpieceTemplate(item.customComponentId);
+          effectiveShape = 'carton';
+        }
+      } else if (requestedShape === 'custom-model') {
+        effectiveShape = 'carton';
       }
 
-      const bandMat = itemBandMatRefs.current[i];
-      if (bandMat) {
-        if (item.isAccumulated) {
-          bandMat.color.setHex(0xf59e0b);
-          bandMat.emissive.setHex(0xd97706);
-          bandMat.emissiveIntensity = 0.75;
-        } else {
-          bandMat.color.setHex(0x1e293b);
-          bandMat.emissive.setHex(0x0ea5e9);
-          bandMat.emissiveIntensity = 0.22;
+      const shapeSubGroups = slotShapeGroups.current[i];
+      if (shapeSubGroups && lastShapeKeyBySlot.current[i] !== effectiveShape) {
+        lastShapeKeyBySlot.current[i] = effectiveShape;
+        const allShapes: WorkpieceShapeType[] = [
+          'carton',
+          'pallet',
+          'tote',
+          'cylinder',
+          'plate',
+          'custom-model',
+        ];
+        for (const sKey of allShapes) {
+          const sub = shapeSubGroups[sKey];
+          if (sub) sub.visible = sKey === effectiveShape;
         }
+
+        const bMat = slotMaterials[i]?.body;
+        if (bMat) {
+          bMat.metalness =
+            effectiveShape === 'plate'
+              ? 0.68
+              : effectiveShape === 'cylinder'
+                ? 0.42
+                : 0.14;
+          bMat.roughness =
+            effectiveShape === 'plate'
+              ? 0.26
+              : effectiveShape === 'tote'
+                ? 0.34
+                : 0.46;
+        }
+      }
+
+      const matPair = slotMaterials[i];
+      if (matPair) {
+        if (lastColorHexBySlot.current[i] !== item.colorHex) {
+          matPair.body.color.set(item.colorHex);
+          lastColorHexBySlot.current[i] = item.colorHex;
+        }
+
+        if (item.isAccumulated) {
+          matPair.band.color.setHex(0xf59e0b);
+          matPair.band.emissive.setHex(0xd97706);
+          matPair.band.emissiveIntensity = 0.78;
+        } else {
+          matPair.band.color.setHex(0x1e293b);
+          matPair.band.emissive.setHex(0x0ea5e9);
+          matPair.band.emissiveIntensity = 0.22;
+        }
+      }
+    }
+
+    // Update live 3D Conveyor Belt Drop Ghost Preview during HTML5 dragover
+    const ghostGrp = dropGhostGroupRef.current;
+    if (ghostGrp) {
+      const dragHit = transportRuntime.getDragPreviewHit();
+      const dragDesc = transportRuntime.getActiveDraggedWorkpiece();
+      if (dragHit && dragDesc) {
+        const gLenM = Math.max(0.06, dragDesc.dimensionsMm[0] * 0.001);
+        const gWidM = Math.max(0.06, dragDesc.dimensionsMm[1] * 0.001);
+        const gHgtM = Math.max(0.035, dragDesc.dimensionsMm[2] * 0.001);
+
+        ghostGrp.visible = true;
+        ghostGrp.position.set(
+          dragHit.worldPoint[0],
+          dragHit.worldPoint[1] + 0.006,
+          dragHit.worldPoint[2]
+        );
+        ghostGrp.quaternion.set(
+          dragHit.worldQuaternion[0],
+          dragHit.worldQuaternion[1],
+          dragHit.worldQuaternion[2],
+          dragHit.worldQuaternion[3]
+        );
+        if (dropGhostBoxRef.current) {
+          dropGhostBoxRef.current.position.set(0, gHgtM * 0.5, 0);
+          dropGhostBoxRef.current.scale.set(gLenM, gHgtM, gWidM);
+        }
+        if (dropGhostMatRef.current) {
+          dropGhostMatRef.current.color.set(dragDesc.colorHex);
+        }
+      } else if (ghostGrp.visible) {
+        ghostGrp.visible = false;
       }
     }
 
@@ -470,52 +684,258 @@ export const TransportFlowOverlay = memo(function TransportFlowOverlay() {
     []
   );
 
+  const registerSlotShapeRef = (
+    slotIdx: number,
+    shapeKey: WorkpieceShapeType,
+    el: THREE.Group | null
+  ) => {
+    let entry = slotShapeGroups.current[slotIdx];
+    if (!entry) {
+      entry = {};
+      slotShapeGroups.current[slotIdx] = entry;
+    }
+    entry[shapeKey] = el;
+  };
+
   return (
     <group name="TransportFlowOverlayGroup">
-      {/* 1. Pooled 3D Dynamic Workpieces (Cartons / Industrial Totes) */}
-      {poolIndices.map((slotIdx) => (
-        <group
-          key={slotIdx}
-          ref={(el) => {
-            itemGroupRefs.current[slotIdx] = el;
-          }}
-          visible={false}
-          raycast={() => null}
-        >
-          <mesh geometry={sharedGeoms.box} castShadow receiveShadow raycast={() => null}>
-            <meshStandardMaterial
-              ref={(mat) => {
-                itemBodyMatRefs.current[slotIdx] = mat;
-              }}
-              color="#0ea5e9"
-              roughness={0.42}
-              metalness={0.12}
-            />
-          </mesh>
+      {/* 1. Pooled 3D Multi-Shape Workpieces (Carton, Pallet, Tote, Cylinder, Plate, Custom GLB/USD) */}
+      {poolIndices.map((slotIdx) => {
+        const bodyMat = slotMaterials[slotIdx].body;
+        const bandMat = slotMaterials[slotIdx].band;
 
-          {/* Perimeter status stripe (glows amber when smoothly accumulated in a queue) */}
-          <mesh geometry={sharedGeoms.band} raycast={() => null}>
-            <meshStandardMaterial
-              ref={(mat) => {
-                itemBandMatRefs.current[slotIdx] = mat;
-              }}
-              color="#1e293b"
-              emissive="#0ea5e9"
-              emissiveIntensity={0.22}
-              roughness={0.35}
-            />
-          </mesh>
-
-          {/* Top shipping manifest / barcode label */}
-          <mesh
-            geometry={sharedGeoms.label}
-            position={[0.08, 0.505, 0]}
+        return (
+          <group
+            key={slotIdx}
+            ref={(el) => {
+              itemGroupRefs.current[slotIdx] = el;
+            }}
+            visible={false}
             raycast={() => null}
           >
-            <meshStandardMaterial color="#f8fafc" roughness={0.65} />
-          </mesh>
-        </group>
-      ))}
+            {/* A. Shipping Carton Box */}
+            <group
+              ref={(el) => registerSlotShapeRef(slotIdx, 'carton', el)}
+              visible
+            >
+              <mesh
+                geometry={sharedGeoms.box}
+                material={bodyMat}
+                castShadow
+                receiveShadow
+                raycast={() => null}
+              />
+              <mesh
+                geometry={sharedGeoms.band}
+                material={bandMat}
+                raycast={() => null}
+              />
+              <mesh
+                geometry={sharedGeoms.box}
+                material={accentMaterials.kraftTape}
+                position={[0, 0.504, 0]}
+                scale={[0.98, 0.014, 0.12]}
+                raycast={() => null}
+              />
+              <mesh
+                geometry={sharedGeoms.label}
+                material={accentMaterials.labelWhite}
+                position={[0.1, 0.508, 0.14]}
+                raycast={() => null}
+              />
+            </group>
+
+            {/* B. Industrial Slatted Pallet + Strapped Load */}
+            <group
+              ref={(el) => registerSlotShapeRef(slotIdx, 'pallet', el)}
+              visible={false}
+            >
+              {([-0.4, 0, 0.4] as const).map((zOff, rIdx) => (
+                <mesh
+                  key={rIdx}
+                  geometry={sharedGeoms.box}
+                  material={accentMaterials.woodRunner}
+                  position={[0, -0.39, zOff]}
+                  scale={[1, 0.22, 0.15]}
+                  castShadow
+                  receiveShadow
+                  raycast={() => null}
+                />
+              ))}
+              <mesh
+                geometry={sharedGeoms.box}
+                material={accentMaterials.woodDeck}
+                position={[0, -0.21, 0]}
+                scale={[1, 0.14, 1]}
+                castShadow
+                receiveShadow
+                raycast={() => null}
+              />
+              <mesh
+                geometry={sharedGeoms.box}
+                material={bodyMat}
+                position={[0, 0.18, 0]}
+                scale={[0.88, 0.64, 0.86]}
+                castShadow
+                receiveShadow
+                raycast={() => null}
+              />
+              <mesh
+                geometry={sharedGeoms.band}
+                material={bandMat}
+                position={[0, 0.18, 0]}
+                scale={[0.89, 0.85, 0.87]}
+                raycast={() => null}
+              />
+            </group>
+
+            {/* C. Open-Top Automotive KLT Tote Bin */}
+            <group
+              ref={(el) => registerSlotShapeRef(slotIdx, 'tote', el)}
+              visible={false}
+            >
+              <mesh
+                geometry={sharedGeoms.box}
+                material={bodyMat}
+                position={[0, -0.07, 0]}
+                scale={[0.95, 0.86, 0.95]}
+                castShadow
+                receiveShadow
+                raycast={() => null}
+              />
+              <mesh
+                geometry={sharedGeoms.box}
+                material={bodyMat}
+                position={[0, 0.41, 0]}
+                scale={[1.02, 0.18, 1.02]}
+                castShadow
+                receiveShadow
+                raycast={() => null}
+              />
+              <mesh
+                geometry={sharedGeoms.box}
+                material={accentMaterials.darkCavity}
+                position={[0, 0.49, 0]}
+                scale={[0.82, 0.04, 0.82]}
+                raycast={() => null}
+              />
+              <mesh
+                geometry={sharedGeoms.band}
+                material={bandMat}
+                position={[0, 0.04, 0]}
+                scale={[0.97, 0.85, 0.97]}
+                raycast={() => null}
+              />
+            </group>
+
+            {/* D. Cylindrical Canister / Bottle */}
+            <group
+              ref={(el) => registerSlotShapeRef(slotIdx, 'cylinder', el)}
+              visible={false}
+            >
+              <mesh
+                geometry={sharedGeoms.cylBody}
+                material={bodyMat}
+                position={[0, -0.06, 0]}
+                castShadow
+                receiveShadow
+                raycast={() => null}
+              />
+              <mesh
+                geometry={sharedGeoms.cylCap}
+                material={accentMaterials.steelBright}
+                position={[0, 0.43, 0]}
+                castShadow
+                raycast={() => null}
+              />
+              <mesh
+                geometry={sharedGeoms.cylCollar}
+                material={bandMat}
+                position={[0, -0.04, 0]}
+                raycast={() => null}
+              />
+            </group>
+
+            {/* E. CNC Machined Metal Billet / Plate */}
+            <group
+              ref={(el) => registerSlotShapeRef(slotIdx, 'plate', el)}
+              visible={false}
+            >
+              <mesh
+                geometry={sharedGeoms.box}
+                material={bodyMat}
+                position={[0, -0.17, 0]}
+                scale={[1, 0.66, 1]}
+                castShadow
+                receiveShadow
+                raycast={() => null}
+              />
+              <mesh
+                geometry={sharedGeoms.box}
+                material={accentMaterials.steelBright}
+                position={[0, 0.33, 0]}
+                scale={[0.7, 0.34, 0.7]}
+                castShadow
+                raycast={() => null}
+              />
+              <mesh
+                geometry={sharedGeoms.band}
+                material={bandMat}
+                position={[0, -0.17, 0]}
+                scale={[1.01, 1.3, 1.01]}
+                raycast={() => null}
+              />
+            </group>
+
+            {/* F. Custom Imported .GLB / .USD CAD Workpiece */}
+            <group
+              ref={(el) => registerSlotShapeRef(slotIdx, 'custom-model', el)}
+              visible={false}
+            >
+              <group
+                ref={(el) => {
+                  slotCustomMounts.current[slotIdx] = el;
+                }}
+              />
+              <mesh
+                geometry={sharedGeoms.band}
+                material={bandMat}
+                position={[0, -0.47, 0]}
+                scale={[1, 0.42, 1]}
+                raycast={() => null}
+              />
+            </group>
+          </group>
+        );
+      })}
+
+      {/* 1b. Live 3D Belt Drop Target Ghost Preview (when dragging Workpiece from Catalog) */}
+      <group ref={dropGhostGroupRef} visible={false} raycast={() => null}>
+        <mesh
+          geometry={sharedGeoms.ghostRing}
+          rotation={[-Math.PI / 2, 0, 0]}
+          position={[0, 0.004, 0]}
+          raycast={() => null}
+        >
+          <meshBasicMaterial
+            color="#10b981"
+            side={THREE.DoubleSide}
+            transparent
+            opacity={0.92}
+            toneMapped={false}
+          />
+        </mesh>
+        <mesh ref={dropGhostBoxRef} geometry={sharedGeoms.box} raycast={() => null}>
+          <meshBasicMaterial
+            ref={dropGhostMatRef}
+            color="#0ea5e9"
+            transparent
+            opacity={0.42}
+            depthWrite={false}
+            toneMapped={false}
+          />
+        </mesh>
+      </group>
 
       {/* 2. Spline Transport Centerlines, Flow Chevrons, Portals & 3D Sensors */}
       {showTransportPaths && (

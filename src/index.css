@@ -2979,3 +2979,132 @@ body,
   gap: 7px;
   color: var(--vc-text-primary);
 }
+
+/* =========================================================================
+   Workpiece Catalog & Direct 3D Conveyor Belt Drag-and-Drop Styles
+   ========================================================================= */
+
+.vc-filter-pill-workpiece {
+  color: hsl(156, 82%, 62%);
+}
+
+.vc-filter-pill-workpiece.active {
+  background: var(--vc-emerald-dim);
+  border-color: hsla(156, 74%, 45%, 0.5);
+  color: hsl(156, 86%, 68%);
+}
+
+.vc-catalog-group-block {
+  margin-bottom: 10px;
+}
+
+.vc-catalog-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 2px 5px;
+  margin-bottom: 5px;
+  border-bottom: 1px dashed var(--vc-border);
+}
+
+.vc-machines-subhead {
+  margin-top: 8px;
+}
+
+.vc-catalog-subhead-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--vc-text-secondary);
+}
+
+.vc-catalog-inline-clear {
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 3px;
+  border: 1px solid var(--vc-border);
+  background: var(--vc-bg-input);
+  color: var(--vc-text-muted);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.vc-catalog-inline-clear:hover {
+  color: var(--vc-text-primary);
+  border-color: var(--vc-border-strong);
+}
+
+.vc-workpiece-card {
+  border-left: 3px solid hsla(156, 74%, 45%, 0.65);
+}
+
+.vc-workpiece-card:hover {
+  border-color: hsla(156, 74%, 52%, 0.75);
+}
+
+.vc-workpiece-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vc-workpiece-title-row small {
+  color: var(--vc-text-secondary);
+  font-weight: 500;
+  font-size: 10.5px;
+}
+
+.vc-workpiece-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
+.vc-format-pill.workpiece {
+  background: hsla(38, 92%, 53%, 0.16);
+  color: hsl(38, 94%, 66%);
+  border: 1px solid hsla(38, 92%, 53%, 0.3);
+}
+
+.vc-feed-belt-btn {
+  background: var(--vc-emerald-dim);
+  border-color: hsla(156, 74%, 45%, 0.48);
+  color: hsl(156, 86%, 68%);
+}
+
+.vc-feed-belt-btn:hover {
+  background: hsla(156, 74%, 45%, 0.28);
+  color: #ffffff;
+}
+
+.vc-custom-wp-section {
+  margin-top: 8px;
+}
+
+.vc-quick-feed-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.vc-flex-1 {
+  flex: 1;
+  min-width: 0;
+}
+
+.vc-hud-belt-snap {
+  background: hsla(156, 74%, 18%, 0.92);
+  border: 1px solid hsla(156, 80%, 50%, 0.75);
+  color: hsl(156, 92%, 76%);
+  font-weight: 700;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+}

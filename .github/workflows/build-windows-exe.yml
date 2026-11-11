@@ -52,18 +52,14 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.4.0-milestone4
-          name: "Milestone 4 (Complete Suite) — Live S7 / MELSEC 3E / OPC UA PLC Drivers & Full I/O Tag Matrix (.exe)"
+          tag_name: v0.4.1-workpieces
+          name: "v0.4.1 — Industrial Workpiece Catalog + Direct 3D Belt Drag-and-Drop + Live PLC Drivers (.exe)"
           body: |
-            ### Milestone 4 Deliverable — Complete Standalone Windows `.exe` (`v0.4.0`)
-            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.4.0-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
-            - **Complete Virtual Commissioning Feature Set (Milestones 1 + 2 + 3 + 4):**
-              1. **3D Layout & CAD Importer:** `.glb` / `.gltf` & **OpenUSD (`.usd`, `.usda`, `.usdc`, `.usdz`)** importer + Magnetic `SnapPort` docking + `.json` layout Save/Load
-              2. **Component Builder & Signal Force Console:** Sub-mesh `LinearAxis` / `RotaryAxis` / `VisualEffect` (RPM belt drive) + 60–144Hz zero-re-render FK engine + standalone `Force I/O` console
-              3. **Directed Spline Conveyor Graph & Virtual HSC Encoders:** Catmull-Rom / Polyline 3D paths, zero-jitter Stopper accumulation, sub-frame `Photoelectric` / `Proximity` sensors (`BOOL`), and 32-bit `Encoder Pulse (DINT)` + `Servo Position (REAL)` registers
-              4. **Dedicated `UtilityProcess` Live PLC Engine & Full I/O Tag Binding Matrix:**
-                 - **Siemens S7 (`SiemensS7Adapter`):** Connects to **S7-PLCSIM Advanced / S7-1500 / S7-1200** via RFC1006 ISO-on-TCP (Port `102`, `I`/`Q`/`M`/`DB`) + PLCSIM Advanced Shared Memory / Pipe Bridge Hook
-                 - **Mitsubishi MELSEC (`MitsubishiMcAdapter`):** Connects to **GX Simulator3 / MX Component / iQ-R / Q / FX5U** via **3E Binary MC Protocol** (Batch Read `0401` & Random Write `1402` for `X`/`Y`/`M`/`L`/`B`/`D`/`W`/`R`)
-                 - **Omron / CODESYS / Universal (`OpcUaAdapter`):** Connects via **IEC 62541-6 OPC UA Binary TCP (`opc.tcp://`)** (`ns=2;s=...` / `ns=2;i=...`)
-                 - **Full-Width I/O Tag Binding Matrix:** 1-click vendor auto-addressing presets, CSV Tag Table Import/Export, `Scale` & `Offset` linear engineering scaling, live syntax validation, and bidirectional Manual Force Overrides
+            ### v0.4.1 Deliverable — Standalone Windows `.exe` (`VC-Digital-Twin-Studio-0.4.1-Portable.exe`)
+            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.4.1-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
+            - **New in `v0.4.1` — Industrial Workpiece Catalog & Direct 3D Conveyor Belt Drag-and-Drop:**
+              - **5 Built-in Test Workpieces:** **Carton Box (กล่องพัสดุ)**, **Industrial Pallet (พาเลทสินค้า)**, **KLT Tote Bin (ลังพลาสติก)**, **Cylinder / Canister (ทรงกระบอก/ขวด)**, and **CNC Metal Billet (แผ่นโลหะสำหรับทดสอบ Inductive Proximity Sensor)**.
+              - **Zero-Parallax 3D Belt Spline Snapping & Ghost Preview:** Drag any workpiece from the Left Dock and drop it at *any* millimeter along any elevated/curved conveyor spline (`STOPPED`, `PAUSED`, or `RUNNING`) — immediately triggers `Photoelectric` / `Proximity` sensors (`SIM_TO_PLC BOOL`) and queues cleanly without overlapping!
+              - **Custom `.GLB` / `OpenUSD` CAD Workpieces:** Use any imported `.glb`, `.gltf`, `.usd`, `.usda`, `.usdc`, or `.usdz` 3D CAD model as a moving product on conveyor belts or continuous `PartSource` feeders.
+            - **Includes Full Milestones 1–4 Suite:** glTF/OpenUSD Importer, Component Axis Builder & Force I/O, Spline Accumulation & HSC `DINT`/`REAL` Encoders, and Live `UtilityProcess` PLC Drivers (**Siemens S7-PLCSIM Adv**, **Mitsubishi MELSEC 3E GX Sim3**, **OPC UA**, + **Full I/O Tag Matrix**).
           files: release/*.exe

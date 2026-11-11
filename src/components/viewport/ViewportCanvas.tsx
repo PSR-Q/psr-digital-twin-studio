@@ -13,6 +13,7 @@ import {
   isSupported3dModelFile,
 } from '../../engine/glbAssetRegistry';
 import { runtimeBusClient } from '../../engine/runtimeBusClient';
+import { transportRuntime } from '../../engine/transportEngine';
 import type { ComponentDefinition, Vector3Tuple } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
 import { SceneInstanceMesh } from './SceneInstanceMesh';
@@ -119,35 +120,61 @@ const CameraOrbitController = memo(function CameraOrbitController() {
   );
 });
 
+interface ViewportRayBridge {
+  raycastFloor: (clientX: number, clientY: number) => Vector3Tuple;
+  getCameraRay: (
+    clientX: number,
+    clientY: number
+  ) => { origin: Vector3Tuple; direction: Vector3Tuple };
+}
+
 /**
- * Exposes a zero-overhead function to raycast screen pixel coordinates onto the Y=0 factory floor
- * when dropping .glb files or Asset Catalog items onto the Canvas.
+ * Exposes zero-overhead functions to compute 3D camera rays (for elevated conveyor spline
+ * workpiece drops) and Y=0 factory floor intersections (for machine & .glb/.usd drops).
  */
 function DropRaycasterBridge({
   bridgeRef,
 }: {
-  bridgeRef: React.MutableRefObject<
-    ((clientX: number, clientY: number) => Vector3Tuple) | null
-  >;
+  bridgeRef: React.MutableRefObject<ViewportRayBridge | null>;
 }) {
   const { camera, gl } = useThree();
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
 
   useEffect(() => {
     configureGlbRendererSupport(gl);
-    bridgeRef.current = (clientX: number, clientY: number): Vector3Tuple => {
-      const rect = gl.domElement.getBoundingClientRect();
-      const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
-      const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
-      const hit = new THREE.Vector3();
-      const intersected = raycaster.ray.intersectPlane(GROUND_PLANE, hit);
-      if (!intersected) return [0, 0, 0];
-      return [
-        Math.max(-25, Math.min(25, hit.x)),
-        0,
-        Math.max(-25, Math.min(25, hit.z)),
-      ];
+    bridgeRef.current = {
+      raycastFloor: (clientX: number, clientY: number): Vector3Tuple => {
+        const rect = gl.domElement.getBoundingClientRect();
+        const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+        const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+        raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+        const hit = new THREE.Vector3();
+        const intersected = raycaster.ray.intersectPlane(GROUND_PLANE, hit);
+        if (!intersected) return [0, 0, 0];
+        return [
+          Math.max(-25, Math.min(25, hit.x)),
+          0,
+          Math.max(-25, Math.min(25, hit.z)),
+        ];
+      },
+      getCameraRay: (clientX: number, clientY: number) => {
+        const rect = gl.domElement.getBoundingClientRect();
+        const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+        const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+        raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+        return {
+          origin: [
+            raycaster.ray.origin.x,
+            raycaster.ray.origin.y,
+            raycaster.ray.origin.z,
+          ],
+          direction: [
+            raycaster.ray.direction.x,
+            raycaster.ray.direction.y,
+            raycaster.ray.direction.z,
+          ],
+        };
+      },
     };
     return () => {
       bridgeRef.current = null;
@@ -170,48 +197,133 @@ function DropRaycasterBridge({
 }
 
 export function ViewportCanvas() {
-  const [isDragOver, setIsDragOver] = useState(false);
-  const raycastDropRef = useRef<
-    ((clientX: number, clientY: number) => Vector3Tuple) | null
-  >(null);
+  const [isFileDragOver, setIsFileDragOver] = useState(false);
+  const [workpieceAimText, setWorkpieceAimText] = useState<string | null>(null);
+  const lastAimTextRef = useRef<string | null>(null);
+  const raycastDropRef = useRef<ViewportRayBridge | null>(null);
 
   const selectInstance = useEditorStore((s) => s.selectInstance);
   const spawnInstance = useEditorStore((s) => s.spawnInstance);
+  const dropWorkpieceByRay = useEditorStore((s) => s.dropWorkpieceByRay);
   const importGlbBuffer = useEditorStore((s) => s.importGlbBuffer);
   const loadSceneFromJsonString = useEditorStore((s) => s.loadSceneFromJsonString);
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
+
+  const updateAimTextDeduped = useCallback((next: string | null) => {
+    if (lastAimTextRef.current === next) return;
+    lastAimTextRef.current = next;
+    setWorkpieceAimText(next);
+  }, []);
 
   const handleDragOver = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
-      if (!isDragOver) setIsDragOver(true);
+
+      const types = Array.from(e.dataTransfer.types);
+      const isWorkpieceDrag =
+        types.includes('application/vc-workpiece-preset') ||
+        types.includes('application/vc-workpiece-component-id');
+
+      if (isWorkpieceDrag) {
+        if (isFileDragOver) setIsFileDragOver(false);
+        const bridge = raycastDropRef.current;
+        if (bridge) {
+          const ray = bridge.getCameraRay(e.clientX, e.clientY);
+          const st = useEditorStore.getState();
+          const hit = transportRuntime.findClosestBeltPointFromRay({
+            rayOrigin: ray.origin,
+            rayDirection: ray.direction,
+            graph: st.scene.transportGraph,
+            instances: st.scene.instances,
+            componentLibrary: st.scene.componentLibrary,
+            bindings: st.scene.plcTagMap.bindings,
+            bufferView: runtimeBusClient.bufferView,
+            maxCaptureRadiusMeters: 0.92,
+          });
+          transportRuntime.setDragPreviewHit(hit);
+
+          if (hit) {
+            const instName =
+              st.scene.instances.find((i) => i.id === hit.instanceId)?.name ??
+              hit.instanceId;
+            updateAimTextDeduped(
+              `DROP WORKPIECE ON BELT: ${instName} @ ${Math.round(hit.distanceMm)} mm — Release to Place`
+            );
+          } else {
+            updateAimTextDeduped(
+              'AIM AT ANY CYAN CONVEYOR SPLINE PATH TO PLACE WORKPIECE ON BELT'
+            );
+          }
+        }
+        return;
+      }
+
+      // Only display the full-screen file drop card when dragging external OS files
+      const hasExternalFiles = types.includes('Files');
+      if (hasExternalFiles && !isFileDragOver) {
+        setIsFileDragOver(true);
+      }
     },
-    [isDragOver]
+    [isFileDragOver, updateAimTextDeduped]
   );
 
-  const handleDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
-    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
-    setIsDragOver(false);
-  }, []);
+  const handleDragLeave = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+      setIsFileDragOver(false);
+      transportRuntime.setDragPreviewHit(null);
+      updateAimTextDeduped(null);
+    },
+    [updateAimTextDeduped]
+  );
 
   const handleDrop = useCallback(
     async (e: DragEvent<HTMLDivElement>) => {
       e.preventDefault();
-      setIsDragOver(false);
+      setIsFileDragOver(false);
+      transportRuntime.setDragPreviewHit(null);
+      transportRuntime.setActiveDraggedWorkpiece(null);
+      updateAimTextDeduped(null);
+
+      // Case 1: Dragged a Test Workpiece Preset onto a 3D Conveyor Belt
+      const workpiecePresetId = e.dataTransfer.getData(
+        'application/vc-workpiece-preset'
+      );
+      if (workpiecePresetId && raycastDropRef.current) {
+        const ray = raycastDropRef.current.getCameraRay(e.clientX, e.clientY);
+        dropWorkpieceByRay(ray.origin, ray.direction, {
+          kind: 'preset',
+          presetId: workpiecePresetId,
+        });
+        return;
+      }
+
+      // Case 2: Dragged a Custom 3D (.GLB / .USD) Workpiece onto a 3D Conveyor Belt
+      const workpieceCompId = e.dataTransfer.getData(
+        'application/vc-workpiece-component-id'
+      );
+      if (workpieceCompId && raycastDropRef.current) {
+        const ray = raycastDropRef.current.getCameraRay(e.clientX, e.clientY);
+        dropWorkpieceByRay(ray.origin, ray.direction, {
+          kind: 'component',
+          componentId: workpieceCompId,
+        });
+        return;
+      }
 
       const dropPos: Vector3Tuple = raycastDropRef.current
-        ? raycastDropRef.current(e.clientX, e.clientY)
+        ? raycastDropRef.current.raycastFloor(e.clientX, e.clientY)
         : [0, 0, 0];
 
-      // Case 1: Dragged a catalog component card from Left Dock
+      // Case 3: Dragged a catalog machine component card onto factory floor
       const catalogCompId = e.dataTransfer.getData('application/vc-component-id');
       if (catalogCompId) {
         spawnInstance(catalogCompId, dropPos);
         return;
       }
 
-      // Case 2: Dragged external 3D model (.glb/.gltf/.usd/.usda/.usdc/.usdz) or .json scene from OS
+      // Case 4: Dragged external 3D model (.glb/.gltf/.usd/.usda/.usdc/.usdz) or .json scene from OS
       const files = Array.from(e.dataTransfer.files);
       if (files.length === 0) return;
 
@@ -233,7 +345,14 @@ export function ViewportCanvas() {
         }
       }
     },
-    [spawnInstance, importGlbBuffer, loadSceneFromJsonString, setStatusMessage]
+    [
+      dropWorkpieceByRay,
+      spawnInstance,
+      importGlbBuffer,
+      loadSceneFromJsonString,
+      setStatusMessage,
+      updateAimTextDeduped,
+    ]
   );
 
   const isDrawingSplinePath = useEditorStore((s) => s.isDrawingSplinePath);
@@ -299,7 +418,9 @@ export function ViewportCanvas() {
       {/* Viewport HUD Overlay */}
       <div className="vc-viewport-hud-top-left">
         <span className="vc-hud-pill">PERSPECTIVE · Y-UP · METRIC (m)</span>
-        {isDrawingSplinePath ? (
+        {workpieceAimText ? (
+          <span className="vc-hud-pill vc-hud-belt-snap">{workpieceAimText}</span>
+        ) : isDrawingSplinePath ? (
           <button
             type="button"
             className="vc-hud-pill vc-hud-draw-active"
@@ -309,13 +430,13 @@ export function ViewportCanvas() {
           </button>
         ) : (
           <span className="vc-hud-pill vc-hud-pill-muted">
-            Space = Play/Pause · Click = Select · Double-Click Part = Axis Builder
+            Space = Play/Pause · Drag Workpiece onto Belt · Double-Click Part = Axis Builder
           </span>
         )}
       </div>
 
-      {/* Drag-and-Drop Visual Target Overlay */}
-      {isDragOver && (
+      {/* Drag-and-Drop Visual Target Overlay (only for external OS files) */}
+      {isFileDragOver && (
         <div className="vc-dropzone-overlay">
           <div className="vc-dropzone-card">
             <Upload size={28} />

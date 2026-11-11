@@ -22,6 +22,11 @@ import {
   makeSensorSignalKey,
 } from '../../engine/signalCatalogSync';
 import { transportRuntime } from '../../engine/transportEngine';
+import {
+  BUILTIN_WORKPIECE_PRESETS,
+  computeWorkpieceDimensionsFromComponent,
+  findPresetForShape,
+} from '../../engine/workpieceCatalog';
 import type {
   ComponentDefinition,
   PlcTagBinding,
@@ -29,6 +34,7 @@ import type {
   UUID,
   Vector3Tuple,
   VirtualEncoderConfig,
+  WorkpieceShapeType,
 } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
 
@@ -67,8 +73,10 @@ export function TransportBuilderPanel({
   component,
 }: TransportBuilderPanelProps) {
   const [live, setLive] = useState<LiveFlowSnapshot>(EMPTY_SNAPSHOT);
+  const [quickFeedChoice, setQuickFeedChoice] = useState<string>('preset:wp-carton-std');
 
   const instances = useEditorStore((s) => s.scene.instances);
+  const componentLibrary = useEditorStore((s) => s.scene.componentLibrary);
   const transportGraph = useEditorStore((s) => s.scene.transportGraph);
   const bindings = useEditorStore((s) => s.scene.plcTagMap.bindings);
   const runState = useEditorStore((s) => s.runState);
@@ -96,7 +104,7 @@ export function TransportBuilderPanel({
     (s) => s.setInstanceFlowEndpointRole
   );
   const updateInstanceSpawner = useEditorStore((s) => s.updateInstanceSpawner);
-  const triggerManualSpawnNow = useEditorStore((s) => s.triggerManualSpawnNow);
+  const dropWorkpieceQuick = useEditorStore((s) => s.dropWorkpieceQuick);
   const clearAllActiveFlowItems = useEditorStore((s) => s.clearAllActiveFlowItems);
 
   const addInstancePathSensor = useEditorStore((s) => s.addInstancePathSensor);
@@ -606,6 +614,44 @@ export function TransportBuilderPanel({
     );
   };
 
+  const handleQuickFeed = (targetInstId?: UUID) => {
+    if (quickFeedChoice.startsWith('comp:')) {
+      dropWorkpieceQuick(
+        { kind: 'component', componentId: quickFeedChoice.slice(5) },
+        targetInstId
+      );
+    } else {
+      const presetId = quickFeedChoice.startsWith('preset:')
+        ? quickFeedChoice.slice(7)
+        : 'wp-carton-std';
+      dropWorkpieceQuick({ kind: 'preset', presetId }, targetInstId);
+    }
+  };
+
+  const handleSpawnerShapeChange = (nextShape: WorkpieceShapeType) => {
+    if (!instanceSpawner) return;
+    if (nextShape === 'custom-model') {
+      const preferredComp =
+        componentLibrary.find((c) => c.category === 'CustomGlb') ??
+        componentLibrary[0];
+      if (!preferredComp) return;
+      updateInstanceSpawner(instance.id, {
+        partShape: 'custom-model',
+        customComponentId: preferredComp.id,
+        partDimensionsMm: computeWorkpieceDimensionsFromComponent(preferredComp),
+      });
+      return;
+    }
+
+    const preset = findPresetForShape(nextShape);
+    updateInstanceSpawner(instance.id, {
+      partShape: nextShape,
+      customComponentId: undefined,
+      partDimensionsMm: [...preset.dimensionsMm] as Vector3Tuple,
+      partColorHex: preset.colorHex,
+    });
+  };
+
   return (
     <div className="vc-flow-stack">
       {/* Live Simulation Strip */}
@@ -617,17 +663,6 @@ export function TransportBuilderPanel({
           </span>
 
           <div className="vc-inline-btns">
-            {primaryNode && (
-              <button
-                id="btn-spawn-one-now"
-                type="button"
-                className="vc-port-add-btn vc-cyan"
-                onClick={() => triggerManualSpawnNow(instance.id)}
-                title="Drop 1 test workpiece onto this machine's spline path"
-              >
-                <Plus size={10} /> Drop Box
-              </button>
-            )}
             <button
               id="btn-clear-parts-selected"
               type="button"
@@ -639,6 +674,40 @@ export function TransportBuilderPanel({
             </button>
           </div>
         </div>
+
+        {primaryNode && (
+          <div className="vc-quick-feed-row">
+            <select
+              id="select-flow-quick-workpiece"
+              value={quickFeedChoice}
+              onChange={(e) => setQuickFeedChoice(e.target.value)}
+              className="vc-compact-select vc-flex-1"
+              aria-label="Quick Test Workpiece"
+            >
+              {BUILTIN_WORKPIECE_PRESETS.map((wp) => (
+                <option key={wp.id} value={`preset:${wp.id}`}>
+                  {wp.name} ({wp.nameTh})
+                </option>
+              ))}
+              {componentLibrary
+                .filter((c) => c.category === 'CustomGlb')
+                .map((comp) => (
+                  <option key={comp.id} value={`comp:${comp.id}`}>
+                    3D CAD: {comp.name}
+                  </option>
+                ))}
+            </select>
+            <button
+              id="btn-spawn-one-now"
+              type="button"
+              className="vc-port-add-btn vc-cyan"
+              onClick={() => handleQuickFeed(instance.id)}
+              title="Feed 1 selected test workpiece onto this machine's spline path"
+            >
+              <Plus size={10} /> Feed Belt
+            </button>
+          </div>
+        )}
 
         <div className="vc-flow-kpi-grid">
           <div className="vc-flow-kpi-box">
@@ -871,6 +940,56 @@ export function TransportBuilderPanel({
           {instanceSpawner && (
             <div className="vc-joint-form">
               <div className="vc-field-row">
+                <span>Workpiece Type</span>
+                <select
+                  id="select-spawner-shape"
+                  value={instanceSpawner.partShape ?? 'carton'}
+                  onChange={(e) =>
+                    handleSpawnerShapeChange(
+                      e.target.value as WorkpieceShapeType
+                    )
+                  }
+                  className="vc-compact-select"
+                >
+                  <option value="carton">Carton Box · กล่องพัสดุ</option>
+                  <option value="pallet">Industrial Pallet · พาเลทสินค้า</option>
+                  <option value="tote">KLT Tote Bin · ลังพลาสติก</option>
+                  <option value="cylinder">Cylinder / Bottle · ทรงกระบอก</option>
+                  <option value="plate">CNC Metal Billet · แผ่นโลหะ</option>
+                  <option value="custom-model">Custom .GLB / .USD CAD</option>
+                </select>
+              </div>
+
+              {(instanceSpawner.partShape ?? 'carton') === 'custom-model' && (
+                <div className="vc-field-row">
+                  <span>3D CAD Asset</span>
+                  <select
+                    id="select-spawner-custom-comp"
+                    value={instanceSpawner.customComponentId ?? ''}
+                    onChange={(e) => {
+                      const nextComp = componentLibrary.find(
+                        (c) => c.id === e.target.value
+                      );
+                      if (!nextComp) return;
+                      updateInstanceSpawner(instance.id, {
+                        customComponentId: nextComp.id,
+                        partDimensionsMm:
+                          computeWorkpieceDimensionsFromComponent(nextComp),
+                      });
+                    }}
+                    className="vc-compact-select"
+                  >
+                    {componentLibrary.map((comp) => (
+                      <option key={comp.id} value={comp.id}>
+                        {comp.category === 'CustomGlb' ? '★ ' : ''}
+                        {comp.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="vc-field-row">
                 <span>Feed Mode</span>
                 <select
                   id="select-spawner-mode"
@@ -909,7 +1028,7 @@ export function TransportBuilderPanel({
 
               <div className="vc-vec3-block">
                 <span className="vc-vec3-title">
-                  Workpiece Box Size L × W × H (mm)
+                  Workpiece Size L × W × H (mm)
                 </span>
                 <div className="vc-vec3-grid">
                   {(['L', 'W', 'H'] as const).map((lbl, idx) => (
@@ -918,7 +1037,7 @@ export function TransportBuilderPanel({
                       <input
                         type="number"
                         step={10}
-                        min={50}
+                        min={35}
                         value={instanceSpawner.partDimensionsMm[idx]}
                         onChange={(e) =>
                           updatePartDimAxis(idx as 0 | 1 | 2, e.target.value)
@@ -929,19 +1048,21 @@ export function TransportBuilderPanel({
                 </div>
               </div>
 
-              <div className="vc-color-row">
-                <span>Carton Color</span>
-                <input
-                  id="input-spawner-color"
-                  type="color"
-                  value={instanceSpawner.partColorHex}
-                  onChange={(e) =>
-                    updateInstanceSpawner(instance.id, {
-                      partColorHex: e.target.value,
-                    })
-                  }
-                />
-              </div>
+              {(instanceSpawner.partShape ?? 'carton') !== 'custom-model' && (
+                <div className="vc-color-row">
+                  <span>Workpiece Color</span>
+                  <input
+                    id="input-spawner-color"
+                    type="color"
+                    value={instanceSpawner.partColorHex}
+                    onChange={(e) =>
+                      updateInstanceSpawner(instance.id, {
+                        partColorHex: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+              )}
 
               <div className="vc-kv-row">
                 <span>Spawned Count (DINT)</span>

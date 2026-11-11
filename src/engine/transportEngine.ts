@@ -10,6 +10,7 @@ import {
   type TransportPathNode,
   type UUID,
   type Vector3Tuple,
+  type WorkpieceShapeType,
 } from '../shared/schemas';
 import { makeNodeSignalKey } from './signalCatalogSync';
 import { eulerDegToQuaternion } from './snapEngine';
@@ -25,6 +26,23 @@ import { eulerDegToQuaternion } from './snapEngine';
 export interface RuntimeFlowItem extends FlowItemState {
   prevDistanceMm: number;
   serialNumber: number;
+}
+
+export interface BeltDropHitResult {
+  pathNodeId: UUID;
+  instanceId: UUID;
+  distanceMm: number;
+  worldPoint: Vector3Tuple;
+  worldQuaternion: [number, number, number, number];
+  rayDistanceMeters: number;
+}
+
+export interface DraggedWorkpieceDescriptor {
+  shape: WorkpieceShapeType;
+  dimensionsMm: Vector3Tuple;
+  colorHex: string;
+  label: string;
+  customComponentId?: UUID;
 }
 
 export interface WorldPathSampleTable {
@@ -311,6 +329,73 @@ function projectPointToPathDistanceMm(
   };
 }
 
+function closestDistanceRayToSegment(
+  ox: number,
+  oy: number,
+  oz: number,
+  dx: number,
+  dy: number,
+  dz: number,
+  p0x: number,
+  p0y: number,
+  p0z: number,
+  p1x: number,
+  p1y: number,
+  p1z: number
+): { segU: number; rayT: number; distSq: number } {
+  const vx = p1x - p0x;
+  const vy = p1y - p0y;
+  const vz = p1z - p0z;
+  const wx = ox - p0x;
+  const wy = oy - p0y;
+  const wz = oz - p0z;
+
+  const a = dx * dx + dy * dy + dz * dz;
+  const b = dx * vx + dy * vy + dz * vz;
+  const c = vx * vx + vy * vy + vz * vz;
+  const d = dx * wx + dy * wy + dz * wz;
+  const e = vx * wx + vy * wy + vz * wz;
+
+  let segU = 0;
+  let rayT = 0;
+
+  if (c <= 1e-10) {
+    segU = 0;
+    rayT = a > 1e-10 ? Math.max(0, -d / a) : 0;
+  } else {
+    const det = a * c - b * b;
+    if (det > 1e-9) {
+      segU = Math.min(1, Math.max(0, (a * e - b * d) / det));
+    } else {
+      segU = 0;
+    }
+    rayT = a > 1e-10 ? (b * segU - d) / a : 0;
+    if (rayT < 0) {
+      rayT = 0;
+      segU = Math.min(1, Math.max(0, e / c));
+    }
+  }
+
+  const rx = ox + rayT * dx;
+  const ry = oy + rayT * dy;
+  const rz = oz + rayT * dz;
+  const sx = p0x + segU * vx;
+  const sy = p0y + segU * vy;
+  const sz = p0z + segU * vz;
+
+  const ex = rx - sx;
+  const ey = ry - sy;
+  const ez = rz - sz;
+  return {
+    segU,
+    rayT,
+    distSq: ex * ex + ey * ey + ez * ez,
+  };
+}
+
+const _hitSamplePos = new THREE.Vector3();
+const _hitSampleQuat = new THREE.Quaternion();
+
 export class TransportRuntimeEngine {
   private items: RuntimeFlowItem[] = [];
   private serialCounter = 1;
@@ -331,6 +416,9 @@ export class TransportRuntimeEngine {
   private beltDriveMap = new Map<UUID, BeltDriveLookup>();
   private axisLookupMap = new Map<string, AxisFeedbackLookup>();
   private turntableAngleSlotByInst = new Map<UUID, number>();
+
+  private activeDraggedWorkpiece: DraggedWorkpieceDescriptor | null = null;
+  private dragPreviewHit: BeltDropHitResult | null = null;
 
   private cachedConfigSignature = '';
   private wasStopped = true;
@@ -353,6 +441,25 @@ export class TransportRuntimeEngine {
 
   public getSinkCount(sinkId: UUID): number {
     return this.sinkCounts.get(sinkId) ?? 0;
+  }
+
+  public setActiveDraggedWorkpiece(desc: DraggedWorkpieceDescriptor | null): void {
+    this.activeDraggedWorkpiece = desc;
+    if (!desc) {
+      this.dragPreviewHit = null;
+    }
+  }
+
+  public getActiveDraggedWorkpiece(): DraggedWorkpieceDescriptor | null {
+    return this.activeDraggedWorkpiece;
+  }
+
+  public setDragPreviewHit(hit: BeltDropHitResult | null): void {
+    this.dragPreviewHit = hit;
+  }
+
+  public getDragPreviewHit(): BeltDropHitResult | null {
+    return this.dragPreviewHit;
   }
 
   public clearAllFlowItems(bufferView?: BinaryIpcBufferView, graph?: TransportGraph): void {
@@ -446,6 +553,8 @@ export class TransportRuntimeEngine {
       distanceMm: spawnPosMm,
       prevDistanceMm: spawnPosMm,
       currentSpeedMmPerSec: 0,
+      shape: spawner?.partShape ?? 'carton',
+      customComponentId: spawner?.customComponentId,
       dimensionsMm: [...dims] as Vector3Tuple,
       colorHex,
       isAccumulated: false,
@@ -459,6 +568,284 @@ export class TransportRuntimeEngine {
     }
 
     return created;
+  }
+
+  private syncWorldSamplers(
+    graph: TransportGraph,
+    instances: SceneNodeInstance[],
+    bufferView: BinaryIpcBufferView
+  ): Map<UUID, SceneNodeInstance> {
+    const instMap = new Map(instances.map((i) => [i.id, i]));
+    const activeNodeIds = new Set<UUID>();
+
+    for (const node of Object.values(graph.nodes)) {
+      const inst = instMap.get(node.instanceId);
+      if (!inst || !inst.visible) continue;
+      activeNodeIds.add(node.id);
+
+      const deckSlot = this.turntableAngleSlotByInst.get(inst.id);
+      const rawDeckAngle =
+        deckSlot !== undefined && deckSlot >= 0
+          ? bufferView.readFloat32(deckSlot)
+          : 0;
+      const quantizedDeckAngle = Math.round(rawDeckAngle * 20) / 20;
+
+      const sig = `${inst.transform.position.join(',')}|${inst.transform.rotationDeg.join(
+        ','
+      )}|${inst.transform.scale.join(',')}|${node.interpolation}|${quantizedDeckAngle}|${node.localWaypoints
+        .map((w) => w.join(','))
+        .join(';')}`;
+
+      const cached = this.samplerCache.get(node.id);
+      if (!cached || cached.signature !== sig) {
+        const table = buildWorldPathSampleTable(node, inst, quantizedDeckAngle);
+        this.samplerCache.set(node.id, { signature: sig, table });
+      }
+    }
+
+    for (const key of this.samplerCache.keys()) {
+      if (!activeNodeIds.has(key)) this.samplerCache.delete(key);
+    }
+    if (this.items.some((it) => !activeNodeIds.has(it.pathNodeId))) {
+      this.items = this.items.filter((it) => activeNodeIds.has(it.pathNodeId));
+    }
+
+    return instMap;
+  }
+
+  /**
+   * Zero-parallax 3D camera-ray to elevated conveyor spline closest-point solver.
+   * Snaps accurately to any straight, curved, inclined, or rotated conveyor belt at any elevation!
+   */
+  public findClosestBeltPointFromRay(params: {
+    rayOrigin: Vector3Tuple;
+    rayDirection: Vector3Tuple;
+    graph: TransportGraph;
+    instances: SceneNodeInstance[];
+    componentLibrary: ComponentDefinition[];
+    bindings: PlcTagBinding[];
+    bufferView: BinaryIpcBufferView;
+    maxCaptureRadiusMeters?: number;
+  }): BeltDropHitResult | null {
+    const {
+      rayOrigin,
+      rayDirection,
+      graph,
+      instances,
+      componentLibrary,
+      bindings,
+      bufferView,
+      maxCaptureRadiusMeters = 0.78,
+    } = params;
+
+    this.ensureLookupsSynced(instances, componentLibrary, bindings);
+    this.syncWorldSamplers(graph, instances, bufferView);
+
+    const [ox, oy, oz] = rayOrigin;
+    const dLen = Math.hypot(rayDirection[0], rayDirection[1], rayDirection[2]);
+    if (dLen < 1e-8) return null;
+    const dx = rayDirection[0] / dLen;
+    const dy = rayDirection[1] / dLen;
+    const dz = rayDirection[2] / dLen;
+
+    const maxSq = maxCaptureRadiusMeters * maxCaptureRadiusMeters;
+    let bestHit: {
+      lut: WorldPathSampleTable;
+      distanceMm: number;
+      distSq: number;
+      rayT: number;
+    } | null = null;
+
+    for (const { table: lut } of this.samplerCache.values()) {
+      if (lut.sampleCount < 2) continue;
+      for (let i = 0; i < lut.sampleCount - 1; i++) {
+        const i0 = i * 3;
+        const i1 = (i + 1) * 3;
+        const res = closestDistanceRayToSegment(
+          ox,
+          oy,
+          oz,
+          dx,
+          dy,
+          dz,
+          lut.positions[i0],
+          lut.positions[i0 + 1],
+          lut.positions[i0 + 2],
+          lut.positions[i1],
+          lut.positions[i1 + 1],
+          lut.positions[i1 + 2]
+        );
+        if (res.distSq <= maxSq) {
+          if (
+            !bestHit ||
+            res.distSq < bestHit.distSq - 1e-6 ||
+            (Math.abs(res.distSq - bestHit.distSq) <= 1e-6 && res.rayT < bestHit.rayT)
+          ) {
+            const segDistMm =
+              lut.distancesMm[i] +
+              res.segU * (lut.distancesMm[i + 1] - lut.distancesMm[i]);
+            bestHit = {
+              lut,
+              distanceMm: segDistMm,
+              distSq: res.distSq,
+              rayT: res.rayT,
+            };
+          }
+        }
+      }
+    }
+
+    if (!bestHit) return null;
+
+    sampleWorldPathPose(
+      bestHit.lut,
+      bestHit.distanceMm,
+      _hitSamplePos,
+      _hitSampleQuat
+    );
+
+    return {
+      pathNodeId: bestHit.lut.nodeId,
+      instanceId: bestHit.lut.instanceId,
+      distanceMm: Number(bestHit.distanceMm.toFixed(1)),
+      worldPoint: [_hitSamplePos.x, _hitSamplePos.y, _hitSamplePos.z],
+      worldQuaternion: [
+        _hitSampleQuat.x,
+        _hitSampleQuat.y,
+        _hitSampleQuat.z,
+        _hitSampleQuat.w,
+      ],
+      rayDistanceMeters: Math.sqrt(bestHit.distSq),
+    };
+  }
+
+  /**
+   * Places a test workpiece directly at any millimeter offset along a conveyor spline.
+   * Works in STOPPED, PAUSED, and RUNNING states, automatically nudging into a clean queue
+   * if dropped on top of an existing item, and immediately evaluating PE/PX sensors!
+   */
+  public placeWorkpieceOnPath(params: {
+    graph: TransportGraph;
+    instances: SceneNodeInstance[];
+    componentLibrary: ComponentDefinition[];
+    bindings: PlcTagBinding[];
+    bufferView: BinaryIpcBufferView;
+    pathNodeId: UUID;
+    distanceMm: number;
+    shape: WorkpieceShapeType;
+    dimensionsMm: Vector3Tuple;
+    colorHex: string;
+    customComponentId?: UUID;
+  }): RuntimeFlowItem | null {
+    const {
+      graph,
+      instances,
+      componentLibrary,
+      bindings,
+      bufferView,
+      pathNodeId,
+      distanceMm,
+      shape,
+      dimensionsMm,
+      colorHex,
+      customComponentId,
+    } = params;
+
+    const node = graph.nodes[pathNodeId];
+    if (!node) return null;
+
+    this.ensureLookupsSynced(instances, componentLibrary, bindings);
+    this.syncWorldSamplers(graph, instances, bufferView);
+
+    const lut = this.samplerCache.get(pathNodeId)?.table;
+    const arcLenMm = lut?.arcLengthMm ?? node.arcLengthMm;
+    const halfLen = dimensionsMm[0] * 0.5;
+    const minPosMm = Math.min(arcLenMm * 0.5, halfLen + 12);
+    const maxPosMm = Math.max(minPosMm, arcLenMm - halfLen - 16);
+    const baseTargetMm = Math.min(maxPosMm, Math.max(minPosMm, distanceMm));
+
+    const isClearAt = (candMm: number): boolean => {
+      for (const existing of this.items) {
+        if (existing.pathNodeId !== pathNodeId) continue;
+        const reqSpacing =
+          halfLen + existing.dimensionsMm[0] * 0.5 + ACCUMULATION_GAP_MM * 0.85;
+        if (Math.abs(existing.distanceMm - candMm) < reqSpacing) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    let resolvedMm: number | null = null;
+    if (isClearAt(baseTargetMm)) {
+      resolvedMm = baseTargetMm;
+    } else {
+      // Search upstream & downstream in 45mm increments so rapid drops stack cleanly!
+      for (let stepMm = 45; stepMm <= arcLenMm; stepMm += 45) {
+        const upstream = baseTargetMm - stepMm;
+        if (upstream >= minPosMm && isClearAt(upstream)) {
+          resolvedMm = upstream;
+          break;
+        }
+        const downstream = baseTargetMm + stepMm;
+        if (downstream <= maxPosMm && isClearAt(downstream)) {
+          resolvedMm = downstream;
+          break;
+        }
+      }
+    }
+
+    if (resolvedMm === null) return null;
+
+    const serial = this.serialCounter++;
+    const created: RuntimeFlowItem = {
+      id: `item-${serial}`,
+      pathNodeId,
+      distanceMm: Number(resolvedMm.toFixed(1)),
+      prevDistanceMm: Number(resolvedMm.toFixed(1)),
+      currentSpeedMmPerSec: 0,
+      shape,
+      customComponentId,
+      dimensionsMm: [...dimensionsMm] as Vector3Tuple,
+      colorHex,
+      isAccumulated: false,
+      serialNumber: serial,
+    };
+
+    this.items.push(created);
+    this.evaluatePathSensors(graph, bufferView);
+    return created;
+  }
+
+  private evaluatePathSensors(
+    graph: TransportGraph,
+    bufferView: BinaryIpcBufferView
+  ): void {
+    for (const sensor of graph.sensors) {
+      const halfWindowMm =
+        sensor.detectionRadiusMm ??
+        (sensor.sensorType === 'photoelectric' ? 18 : 42);
+      const sMin = sensor.offsetMm - halfWindowMm;
+      const sMax = sensor.offsetMm + halfWindowMm;
+
+      let triggered = false;
+      for (let i = 0; i < this.items.length; i++) {
+        const it = this.items[i];
+        if (it.pathNodeId !== sensor.pathNodeId) continue;
+        const halfBox = it.dimensionsMm[0] * 0.5;
+        const sweptRear = Math.min(it.prevDistanceMm, it.distanceMm) - halfBox;
+        const sweptFront = Math.max(it.prevDistanceMm, it.distanceMm) + halfBox;
+        if (sweptFront >= sMin && sweptRear <= sMax) {
+          triggered = true;
+          break;
+        }
+      }
+
+      this.sensorStates.set(sensor.id, triggered);
+      if (sensor.outputBoolSlot >= 0) {
+        bufferView.writeSimToPlcBool(sensor.outputBoolSlot, triggered);
+      }
+    }
   }
 
   private ensureLookupsSynced(
@@ -582,53 +969,19 @@ export class TransportRuntimeEngine {
     } = params;
 
     this.ensureLookupsSynced(instances, componentLibrary, bindings);
-    const instMap = new Map(instances.map((i) => [i.id, i]));
+    const instMap = this.syncWorldSamplers(graph, instances, bufferView);
 
-    // 1. Update cached WorldPathSampleTables for all active TransportPathNodes
-    const activeNodeIds = new Set<UUID>();
-    for (const node of Object.values(graph.nodes)) {
-      const inst = instMap.get(node.instanceId);
-      if (!inst || !inst.visible) continue;
-      activeNodeIds.add(node.id);
-
-      const deckSlot = this.turntableAngleSlotByInst.get(inst.id);
-      const rawDeckAngle =
-        deckSlot !== undefined && deckSlot >= 0
-          ? bufferView.readFloat32(deckSlot)
-          : 0;
-      const quantizedDeckAngle = Math.round(rawDeckAngle * 20) / 20;
-
-      const sig = `${inst.transform.position.join(',')}|${inst.transform.rotationDeg.join(
-        ','
-      )}|${inst.transform.scale.join(',')}|${node.interpolation}|${quantizedDeckAngle}|${node.localWaypoints
-        .map((w) => w.join(','))
-        .join(';')}`;
-
-      const cached = this.samplerCache.get(node.id);
-      if (!cached || cached.signature !== sig) {
-        const table = buildWorldPathSampleTable(node, inst, quantizedDeckAngle);
-        this.samplerCache.set(node.id, { signature: sig, table });
-      }
-    }
-
-    // Prune deleted path samplers & orphaned flow items
-    for (const key of this.samplerCache.keys()) {
-      if (!activeNodeIds.has(key)) this.samplerCache.delete(key);
-    }
-    if (this.items.some((it) => !activeNodeIds.has(it.pathNodeId))) {
-      this.items = this.items.filter((it) => activeNodeIds.has(it.pathNodeId));
-    }
-
-    // Reset runtime flow when simulation returns to STOPPED
+    // Reset runtime flow ONLY on the transition into STOPPED so manually dropped test workpieces
+    // placed while STOPPED remain staged on the belt and immediately trigger PE/PX sensors!
     if (runState === 'STOPPED') {
-      if (!this.wasStopped || this.items.length > 0) {
+      if (!this.wasStopped) {
         this.clearAllFlowItems(bufferView, graph);
         for (const drive of this.beltDriveMap.values()) {
           drive.fallbackRampedRpm = 0;
         }
         this.wasStopped = true;
       }
-      // Still update Servo axis position encoders even in STOPPED / Jog preview!
+      this.evaluatePathSensors(graph, bufferView);
       this.stepAxisEncoders(graph, bufferView, 0);
       return;
     }
@@ -640,6 +993,8 @@ export class TransportRuntimeEngine {
         : 0;
 
     if (dt <= 0) {
+      this.evaluatePathSensors(graph, bufferView);
+      this.stepAxisEncoders(graph, bufferView, 0);
       return;
     }
 
@@ -1031,31 +1386,7 @@ export class TransportRuntimeEngine {
     }
 
     // 8. Sub-Frame Swept Deterministic Path Sensors (Photoelectric & Proximity)
-    for (const sensor of graph.sensors) {
-      const halfWindowMm =
-        sensor.detectionRadiusMm ??
-        (sensor.sensorType === 'photoelectric' ? 18 : 42);
-      const sMin = sensor.offsetMm - halfWindowMm;
-      const sMax = sensor.offsetMm + halfWindowMm;
-
-      let triggered = false;
-      for (let i = 0; i < this.items.length; i++) {
-        const it = this.items[i];
-        if (it.pathNodeId !== sensor.pathNodeId) continue;
-        const halfBox = it.dimensionsMm[0] * 0.5;
-        const sweptRear = Math.min(it.prevDistanceMm, it.distanceMm) - halfBox;
-        const sweptFront = Math.max(it.prevDistanceMm, it.distanceMm) + halfBox;
-        if (sweptFront >= sMin && sweptRear <= sMax) {
-          triggered = true;
-          break;
-        }
-      }
-
-      this.sensorStates.set(sensor.id, triggered);
-      if (sensor.outputBoolSlot >= 0) {
-        bufferView.writeSimToPlcBool(sensor.outputBoolSlot, triggered);
-      }
-    }
+    this.evaluatePathSensors(graph, bufferView);
 
     // 9. Virtual HSC Encoders (`DINT32` Pulses + `FLOAT32` Servo Position & Velocity)
     for (const enc of graph.encoders) {

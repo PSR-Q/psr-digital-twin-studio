@@ -45,6 +45,26 @@ export interface PathSensorBinding {
   outputBoolSlot: number;
 }
 
+export type WorkpieceShapeType =
+  | 'carton'
+  | 'pallet'
+  | 'tote'
+  | 'cylinder'
+  | 'plate'
+  | 'custom-model';
+
+export interface WorkpiecePreset {
+  id: string;
+  name: string;
+  nameTh: string;
+  shape: Exclude<WorkpieceShapeType, 'custom-model'>;
+  /** [Length along belt, Width across belt, Height] in millimeters */
+  dimensionsMm: Vector3Tuple;
+  colorHex: string;
+  materialTag: 'Cardboard' | 'Wood' | 'Polymer' | 'Aluminum' | 'Steel';
+  description: string;
+}
+
 export interface PartSourceRuntimeConfig {
   id: UUID;
   instanceId: UUID;
@@ -54,6 +74,8 @@ export interface PartSourceRuntimeConfig {
   maxActiveItems?: number;
   triggerBoolSlot?: number;
   spawnedCountDintSlot?: number;
+  partShape?: WorkpieceShapeType;
+  customComponentId?: UUID;
   partDimensionsMm: Vector3Tuple;
   partColorHex: string;
 }
@@ -90,6 +112,8 @@ export interface FlowItemState {
   /** 1D travel parameter s in millimeters along active path */
   distanceMm: number;
   currentSpeedMmPerSec: number;
+  shape?: WorkpieceShapeType;
+  customComponentId?: UUID;
   dimensionsMm: Vector3Tuple;
   colorHex: string;
   isAccumulated: boolean;

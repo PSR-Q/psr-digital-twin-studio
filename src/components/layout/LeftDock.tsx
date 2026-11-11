@@ -8,6 +8,7 @@ import {
   Layers,
   Link2,
   Lock,
+  Package,
   Plus,
   Trash2,
   Unlock,
@@ -17,11 +18,19 @@ import {
   detectModelFormat,
   isUsdFormat,
 } from '../../engine/glbAssetRegistry';
+import { transportRuntime } from '../../engine/transportEngine';
+import {
+  BUILTIN_WORKPIECE_PRESETS,
+  computeWorkpieceDimensionsFromComponent,
+} from '../../engine/workpieceCatalog';
 import type { ComponentCategory } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
 
-const CATEGORY_FILTERS: Array<{ key: 'ALL' | ComponentCategory; label: string }> = [
+type CatalogFilterKey = 'ALL' | 'WORKPIECES' | ComponentCategory;
+
+const CATEGORY_FILTERS: Array<{ key: CatalogFilterKey; label: string }> = [
   { key: 'ALL', label: 'All' },
+  { key: 'WORKPIECES', label: 'Workpieces' },
   { key: 'Conveyors', label: 'Conveyors' },
   { key: 'Actuators', label: 'Actuators' },
   { key: 'ProcessEquipment', label: 'Process' },
@@ -29,7 +38,7 @@ const CATEGORY_FILTERS: Array<{ key: 'ALL' | ComponentCategory; label: string }>
 ];
 
 export function LeftDock() {
-  const [activeCategory, setActiveCategory] = useState<'ALL' | ComponentCategory>('ALL');
+  const [activeCategory, setActiveCategory] = useState<CatalogFilterKey>('ALL');
 
   const library = useEditorStore((s) => s.scene.componentLibrary);
   const instances = useEditorStore((s) => s.scene.instances);
@@ -37,6 +46,8 @@ export function LeftDock() {
   const selectedInstanceId = useEditorStore((s) => s.selectedInstanceId);
 
   const spawnInstance = useEditorStore((s) => s.spawnInstance);
+  const dropWorkpieceQuick = useEditorStore((s) => s.dropWorkpieceQuick);
+  const clearAllActiveFlowItems = useEditorStore((s) => s.clearAllActiveFlowItems);
   const importGlbInteractive = useEditorStore((s) => s.importGlbInteractive);
   const selectInstance = useEditorStore((s) => s.selectInstance);
   const toggleInstanceVisibility = useEditorStore((s) => s.toggleInstanceVisibility);
@@ -45,9 +56,18 @@ export function LeftDock() {
   const deleteInstance = useEditorStore((s) => s.deleteInstance);
 
   const filteredCatalog = useMemo(() => {
+    if (activeCategory === 'WORKPIECES') return [];
     if (activeCategory === 'ALL') return library;
     return library.filter((c) => c.category === activeCategory);
   }, [library, activeCategory]);
+
+  const customCadAssets = useMemo(
+    () => library.filter((c) => c.category === 'CustomGlb'),
+    [library]
+  );
+
+  const showWorkpiecesSection =
+    activeCategory === 'ALL' || activeCategory === 'WORKPIECES';
 
   const snapCountByInstance = useMemo(() => {
     const counts = new Map<string, number>();
@@ -60,12 +80,12 @@ export function LeftDock() {
 
   return (
     <aside id="vc-left-dock" className="vc-left-dock">
-      {/* Upper Pane: 3D .GLB & OpenUSD Component Catalog */}
+      {/* Upper Pane: 3D .GLB, OpenUSD & Test Workpiece Catalog */}
       <section className="vc-dock-pane vc-catalog-pane">
         <div className="vc-pane-header">
           <div className="vc-pane-title">
             <Cuboid size={14} />
-            <span>ASSET CATALOG (.GLB / .USD)</span>
+            <span>ASSET & WORKPIECE CATALOG</span>
           </div>
           <button
             id="btn-catalog-import-glb"
@@ -86,7 +106,9 @@ export function LeftDock() {
               key={f.key}
               id={`filter-cat-${f.key}`}
               type="button"
-              className={`vc-filter-pill ${activeCategory === f.key ? 'active' : ''}`}
+              className={`vc-filter-pill ${activeCategory === f.key ? 'active' : ''} ${
+                f.key === 'WORKPIECES' ? 'vc-filter-pill-workpiece' : ''
+              }`}
               onClick={() => setActiveCategory(f.key)}
             >
               {f.label}
@@ -94,8 +116,181 @@ export function LeftDock() {
           ))}
         </div>
 
-        {/* Draggable Component Cards */}
+        {/* Draggable Workpiece & Machine Cards */}
         <div className="vc-catalog-list">
+          {showWorkpiecesSection && (
+            <div className="vc-catalog-group-block">
+              <div className="vc-catalog-subhead">
+                <span className="vc-catalog-subhead-title">
+                  <Package size={11} />
+                  <span>WORKPIECES — DRAG ONTO CONVEYOR BELT</span>
+                </span>
+                <button
+                  id="btn-catalog-clear-workpieces"
+                  type="button"
+                  className="vc-catalog-inline-clear"
+                  onClick={clearAllActiveFlowItems}
+                  title="Clear all active workpieces from conveyor belts"
+                >
+                  Clear
+                </button>
+              </div>
+
+              {BUILTIN_WORKPIECE_PRESETS.map((wp) => {
+                const [lx, wx, hx] = wp.dimensionsMm;
+                return (
+                  <div
+                    key={wp.id}
+                    id={`workpiece-card-${wp.id}`}
+                    className="vc-catalog-card vc-workpiece-card"
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData(
+                        'application/vc-workpiece-preset',
+                        wp.id
+                      );
+                      e.dataTransfer.effectAllowed = 'copy';
+                      transportRuntime.setActiveDraggedWorkpiece({
+                        shape: wp.shape,
+                        dimensionsMm: wp.dimensionsMm,
+                        colorHex: wp.colorHex,
+                        label: wp.name,
+                      });
+                    }}
+                    onDragEnd={() => {
+                      transportRuntime.setActiveDraggedWorkpiece(null);
+                    }}
+                  >
+                    <div className="vc-catalog-card-top">
+                      <div>
+                        <div className="vc-catalog-name vc-workpiece-title-row">
+                          <span
+                            className="vc-workpiece-swatch"
+                            style={{ backgroundColor: wp.colorHex }}
+                          />
+                          <span>
+                            {wp.name} · <small>{wp.nameTh}</small>
+                          </span>
+                        </div>
+                        <div className="vc-catalog-meta">
+                          <span className="vc-format-pill workpiece">
+                            {wp.materialTag.toUpperCase()}
+                          </span>{' '}
+                          {lx}×{wx}×{hx}mm
+                        </div>
+                      </div>
+
+                      <div className="vc-catalog-actions">
+                        <button
+                          id={`feed-wp-btn-${wp.id}`}
+                          type="button"
+                          className="vc-spawn-btn vc-feed-belt-btn"
+                          onClick={() =>
+                            dropWorkpieceQuick({
+                              kind: 'preset',
+                              presetId: wp.id,
+                            })
+                          }
+                          title="Feed 1 workpiece onto selected/infeed conveyor (or drag card to any spot on a 3D belt!)"
+                        >
+                          <Plus size={12} />
+                          <span>On Belt</span>
+                        </button>
+                      </div>
+                    </div>
+                    <p className="vc-catalog-desc">{wp.description}</p>
+                  </div>
+                );
+              })}
+
+              {activeCategory === 'WORKPIECES' && (
+                <div className="vc-custom-wp-section">
+                  <div className="vc-catalog-subhead">
+                    <span className="vc-catalog-subhead-title">
+                      CUSTOM .GLB / .USD CAD WORKPIECES ({customCadAssets.length})
+                    </span>
+                  </div>
+                  {customCadAssets.length === 0 ? (
+                    <div className="vc-subtle-note">
+                      Click <strong>+ Import</strong> above to load any custom{' '}
+                      <code>.glb</code> or <code>OpenUSD</code> product CAD and drag
+                      it directly onto a conveyor belt!
+                    </div>
+                  ) : (
+                    customCadAssets.map((comp) => {
+                      const dimsMm = computeWorkpieceDimensionsFromComponent(comp);
+                      const fmt =
+                        comp.modelSource.format ??
+                        detectModelFormat(
+                          comp.modelSource.fileName || comp.modelSource.uri
+                        );
+                      return (
+                        <div
+                          key={`wp-custom-${comp.id}`}
+                          id={`workpiece-custom-card-${comp.id}`}
+                          className="vc-catalog-card vc-workpiece-card"
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData(
+                              'application/vc-workpiece-component-id',
+                              comp.id
+                            );
+                            e.dataTransfer.effectAllowed = 'copy';
+                            transportRuntime.setActiveDraggedWorkpiece({
+                              shape: 'custom-model',
+                              dimensionsMm: dimsMm,
+                              colorHex: '#38bdf8',
+                              label: comp.name,
+                              customComponentId: comp.id,
+                            });
+                          }}
+                          onDragEnd={() => {
+                            transportRuntime.setActiveDraggedWorkpiece(null);
+                          }}
+                        >
+                          <div className="vc-catalog-card-top">
+                            <div>
+                              <div className="vc-catalog-name">{comp.name}</div>
+                              <div className="vc-catalog-meta">
+                                <span className="vc-format-pill usd">
+                                  {fmt.toUpperCase()} CAD
+                                </span>{' '}
+                                {dimsMm[0]}×{dimsMm[1]}×{dimsMm[2]}mm
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="vc-spawn-btn vc-feed-belt-btn"
+                              onClick={() =>
+                                dropWorkpieceQuick({
+                                  kind: 'component',
+                                  componentId: comp.id,
+                                })
+                              }
+                              title="Feed custom 3D CAD model onto conveyor belt"
+                            >
+                              <Plus size={12} />
+                              <span>On Belt</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {filteredCatalog.length > 0 && activeCategory === 'ALL' && (
+            <div className="vc-catalog-subhead vc-machines-subhead">
+              <span className="vc-catalog-subhead-title">
+                <Cuboid size={11} />
+                <span>MACHINES & EQUIPMENT — DRAG ONTO FLOOR</span>
+              </span>
+            </div>
+          )}
+
           {filteredCatalog.map((comp) => {
             const [sx, sy, sz] = comp.boundingBox.size;
             const fmt =
@@ -141,6 +336,22 @@ export function LeftDock() {
                       >
                         <FileDown size={13} />
                       </a>
+                    )}
+                    {comp.category === 'CustomGlb' && (
+                      <button
+                        type="button"
+                        className="vc-icon-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          dropWorkpieceQuick({
+                            kind: 'component',
+                            componentId: comp.id,
+                          });
+                        }}
+                        title="Feed this imported 3D model onto the Conveyor Belt as a Workpiece"
+                      >
+                        <Package size={13} />
+                      </button>
                     )}
                     <button
                       id={`spawn-btn-${comp.id}`}
