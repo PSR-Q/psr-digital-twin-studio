@@ -1,7 +1,7 @@
-import type { UUID } from './common';
+import type { PlcConnectionState, UUID } from './common';
 
 /**
- * High-Precision PLC Virtual Interface & I/O Tag Binding Schema (Milestone 4 Ready)
+ * High-Precision PLC Virtual Interface & I/O Tag Binding Schema (Milestone 4)
  * Supports InternalSim, Siemens S7-PLCSIM Advanced, Mitsubishi GX Simulator3 (3E MC), and Omron/Universal OPC UA.
  */
 
@@ -14,6 +14,8 @@ export type PlcAdapterType =
 export type PlcSignalDataType = 'BOOL' | 'INT16' | 'DINT32' | 'FLOAT32';
 
 export type PlcSignalDirection = 'PLC_TO_SIM' | 'SIM_TO_PLC';
+
+export type PlcConnectionAction = 'connect' | 'disconnect' | 'reconnect';
 
 export interface SiemensS7DriverConfig {
   host: string;
@@ -67,6 +69,36 @@ export interface PlcTagMap {
   mcConfig: MitsubishiMcDriverConfig;
   opcUaConfig: OpcUaDriverConfig;
   bindings: PlcTagBinding[];
+}
+
+export interface PlcWorkerDiagnostics {
+  activeAdapter: PlcAdapterType;
+  connectionState: PlcConnectionState;
+  endpointSummary: string;
+  targetScanCycleMs: number;
+  actualScanCycleMs: number;
+  cyclicReadCount: number;
+  cyclicWriteCount: number;
+  errorCount: number;
+  lastError: string;
+  sharedMemoryHookStatus: string;
+  isBrowserFallback: boolean;
+}
+
+export function createDefaultPlcDiagnostics(): PlcWorkerDiagnostics {
+  return {
+    activeAdapter: 'InternalSimAdapter',
+    connectionState: 'CONNECTED',
+    endpointSummary: 'In-Memory Deterministic Table',
+    targetScanCycleMs: 10,
+    actualScanCycleMs: 10,
+    cyclicReadCount: 0,
+    cyclicWriteCount: 0,
+    errorCount: 0,
+    lastError: '',
+    sharedMemoryHookStatus: 'Disabled (ISO-on-TCP Mode)',
+    isBrowserFallback: false,
+  };
 }
 
 export function createDefaultPlcTagMap(): PlcTagMap {

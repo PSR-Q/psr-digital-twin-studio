@@ -1,4 +1,9 @@
-import type { PlcTagMap, SimulationRunState } from './schemas';
+import type {
+  PlcConnectionAction,
+  PlcTagMap,
+  PlcWorkerDiagnostics,
+  SimulationRunState,
+} from './schemas';
 
 /**
  * Typed Electron IPC Channels connecting Renderer <-> Main <-> UtilityProcess Worker
@@ -13,6 +18,8 @@ export const IPC_CHANNELS = {
   PLC_BINARY_CMD_TO_WORKER: 'vc:plc:cmd-to-worker',
   PLC_CONTROL_STATE: 'vc:plc:control-state',
   PLC_CONFIGURE_TAG_MAP: 'vc:plc:configure-tag-map',
+  PLC_CONNECTION_ACTION: 'vc:plc:connection-action',
+  PLC_WORKER_STATUS_TO_RENDERER: 'vc:plc:worker-status',
   APP_GET_RUNTIME_INFO: 'vc:app:runtime-info',
 } as const;
 
@@ -49,13 +56,23 @@ export interface RuntimeInfoPayload {
 export interface ElectronBridgeApi {
   isElectron: true;
   openGlbDialog: () => Promise<OpenedGlbPayload | null>;
-  saveSceneDialog: (jsonContent: string, suggestedName: string) => Promise<SavedFileResult>;
+  saveSceneDialog: (
+    jsonContent: string,
+    suggestedName: string
+  ) => Promise<SavedFileResult>;
   loadSceneDialog: () => Promise<LoadedScenePayload | null>;
-  saveComponentDialog: (jsonContent: string, suggestedName: string) => Promise<SavedFileResult>;
+  saveComponentDialog: (
+    jsonContent: string,
+    suggestedName: string
+  ) => Promise<SavedFileResult>;
   sendPlcControl: (cmd: PlcControlCommand) => void;
   configurePlcTagMap: (tagMap: PlcTagMap) => void;
+  sendPlcConnectionAction: (action: PlcConnectionAction) => void;
   pushBinaryCommandFrame: (frame: Uint8Array) => void;
   onPlcBinaryFrame: (listener: (frame: Uint8Array) => void) => () => void;
+  onPlcWorkerStatus: (
+    listener: (status: PlcWorkerDiagnostics) => void
+  ) => () => void;
   getRuntimeInfo: () => Promise<RuntimeInfoPayload>;
 }
 

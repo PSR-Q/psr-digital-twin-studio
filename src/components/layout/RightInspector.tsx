@@ -1,4 +1,5 @@
 import {
+  Cpu,
   ExternalLink,
   Link2,
   Magnet,
@@ -13,6 +14,7 @@ import { useMemo } from 'react';
 import type { SnapPortDefinition, Vector3Tuple } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
 import { ComponentBuilderPanel } from '../inspector/ComponentBuilderPanel';
+import { PlcDriverAndTagPanel } from '../inspector/PlcDriverAndTagPanel';
 import { SignalForcePanel } from '../inspector/SignalForcePanel';
 import { TransportBuilderPanel } from '../inspector/TransportBuilderPanel';
 
@@ -144,7 +146,7 @@ export function RightInspector() {
         )}
       </div>
 
-      {/* 4-Mode Inspector Tabs (Always Accessible) */}
+      {/* 5-Mode Inspector Tabs (Always Accessible) */}
       <div className="vc-inspector-tabs">
         <button
           id="tab-inspector-transform"
@@ -153,7 +155,7 @@ export function RightInspector() {
           onClick={() => setInspectorTab('transform')}
           title="6-DOF Transform & SnapPorts"
         >
-          <Magnet size={12} />
+          <Magnet size={11} />
           <span>Layout</span>
         </button>
         <button
@@ -163,7 +165,7 @@ export function RightInspector() {
           onClick={() => setInspectorTab('builder')}
           title="Kinematics Axis Builder (Linear / Rotary / VFX)"
         >
-          <Wrench size={12} />
+          <Wrench size={11} />
           <span>Builder</span>
         </button>
         <button
@@ -173,7 +175,7 @@ export function RightInspector() {
           onClick={() => setInspectorTab('flow')}
           title="Spline Conveyor Paths, Sensors & HSC Encoders"
         >
-          <Route size={12} />
+          <Route size={11} />
           <span>Flow</span>
         </button>
         <button
@@ -184,44 +186,59 @@ export function RightInspector() {
           title="Signal Force Console (PLC I/O)"
         >
           <Zap
-            size={12}
+            size={11}
             className={activeForceCount > 0 ? 'vc-amber-text' : undefined}
           />
           <span>
-            Force{activeForceCount > 0 ? ` (${activeForceCount})` : ''}
+            Force{activeForceCount > 0 ? `(${activeForceCount})` : ''}
           </span>
+        </button>
+        <button
+          id="tab-inspector-plc"
+          type="button"
+          className={`vc-insp-tab ${inspectorTab === 'plc' ? 'active' : ''}`}
+          onClick={() => setInspectorTab('plc')}
+          title="Live PLC Drivers (S7 / MELSEC 3E / OPC UA) & I/O Tag Matrix"
+        >
+          <Cpu size={11} />
+          <span>PLC</span>
         </button>
       </div>
 
       <div className="vc-inspector-scroll">
         {/* Selected Machine Identity Header (shown in Layout, Builder & Flow modes when selected) */}
-        {selectedInstance && selectedComponent && inspectorTab !== 'signals' && (
-          <div className="vc-inspector-card">
-            <label className="vc-field-label" htmlFor="input-instance-name">
-              INSTANCE IDENTIFIER
-            </label>
-            <input
-              id="input-instance-name"
-              type="text"
-              value={selectedInstance.name}
-              onChange={(e) => renameInstance(selectedInstance.id, e.target.value)}
-              className="vc-text-input"
-            />
-            <div className="vc-source-meta">
-              <span>Asset: {selectedComponent.modelSource.fileName}</span>
-              <span>
-                BBox:{' '}
-                {selectedComponent.boundingBox.size
-                  .map((n) => n.toFixed(2))
-                  .join('×')}
-                m
-              </span>
+        {selectedInstance &&
+          selectedComponent &&
+          inspectorTab !== 'signals' &&
+          inspectorTab !== 'plc' && (
+            <div className="vc-inspector-card">
+              <label className="vc-field-label" htmlFor="input-instance-name">
+                INSTANCE IDENTIFIER
+              </label>
+              <input
+                id="input-instance-name"
+                type="text"
+                value={selectedInstance.name}
+                onChange={(e) => renameInstance(selectedInstance.id, e.target.value)}
+                className="vc-text-input"
+              />
+              <div className="vc-source-meta">
+                <span>Asset: {selectedComponent.modelSource.fileName}</span>
+                <span>
+                  BBox:{' '}
+                  {selectedComponent.boundingBox.size
+                    .map((n) => n.toFixed(2))
+                    .join('×')}
+                  m
+                </span>
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* TAB 4: SIGNAL FORCE CONSOLE (Works for Selected Machine OR All Scene!) */}
-        {inspectorTab === 'signals' ? (
+        {/* TAB 5: LIVE PLC DRIVERS & TAG CONSOLE */}
+        {inspectorTab === 'plc' ? (
+          <PlcDriverAndTagPanel />
+        ) : inspectorTab === 'signals' ? (
           <SignalForcePanel />
         ) : inspectorTab === 'flow' ? (
           <TransportBuilderPanel

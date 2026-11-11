@@ -77,7 +77,7 @@ export function createEmptySceneSchema(
       createdAt: now,
       updatedAt: now,
       units: 'meters',
-      editorVersion: '1.0.0-m3',
+      editorVersion: '1.0.0-m4',
     },
     environment: {
       showGrid: true,

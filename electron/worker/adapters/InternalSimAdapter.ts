@@ -3,15 +3,18 @@ import type {
   PlcConnectionState,
   PlcTagMap,
 } from '../../../src/shared/schemas';
-import type { IPlcAdapter } from './IPlcAdapter';
+import { applyBindingsLocalScan } from './adapterValueCodec';
+import type { IPlcAdapter, PlcAdapterStats } from './IPlcAdapter';
 
 /**
- * Built-in Offline Memory Table Adapter (Active by default in Milestones 1-3).
- * Honours manual Force bits and keeps deterministic scan loop running with zero external PLC dependencies.
+ * Built-in Offline Memory Table Adapter.
+ * Honours manual Force bits (`PLC_TO_SIM` & `SIM_TO_PLC`) and keeps deterministic scan loop
+ * running with zero external PLC dependencies.
  */
 export class InternalSimAdapter implements IPlcAdapter {
   public readonly adapterType = 'InternalSimAdapter' as const;
   private state: PlcConnectionState = 'CONNECTED';
+  private scanCycles = 0;
 
   public async connect(_tagMap: PlcTagMap): Promise<void> {
     this.state = 'CONNECTED';
@@ -25,33 +28,23 @@ export class InternalSimAdapter implements IPlcAdapter {
     return this.state;
   }
 
-  public executeScanCycle(bufferView: BinaryIpcBufferView, tagMap: PlcTagMap): void {
-    for (let i = 0; i < tagMap.bindings.length; i++) {
-      const binding = tagMap.bindings[i];
-      if (binding.direction !== 'PLC_TO_SIM') continue;
+  public getStats(): PlcAdapterStats {
+    return {
+      endpointSummary: 'Built-in Memory Bus (Zero-Latency)',
+      cyclicReadCount: this.scanCycles,
+      cyclicWriteCount: this.scanCycles,
+      errorCount: 0,
+      lastError: '',
+      sharedMemoryHookStatus: 'N/A (Internal Sim)',
+    };
+  }
 
-      if (binding.dataType === 'BOOL') {
-        bufferView.setForceBool(
-          binding.bufferSlotIndex,
-          binding.manualForceEnabled,
-          Boolean(binding.manualForceValue)
-        );
-        if (!binding.manualForceEnabled) {
-          bufferView.writePlcToSimBool(
-            binding.bufferSlotIndex,
-            Boolean(binding.manualForceValue)
-          );
-        }
-      } else {
-        const numericVal = Number(binding.manualForceValue ?? 0);
-        if (binding.dataType === 'INT16') {
-          bufferView.writeInt16(binding.bufferSlotIndex, numericVal);
-        } else if (binding.dataType === 'DINT32') {
-          bufferView.writeDint32(binding.bufferSlotIndex, numericVal);
-        } else if (binding.dataType === 'FLOAT32') {
-          bufferView.writeFloat32(binding.bufferSlotIndex, numericVal);
-        }
-      }
-    }
+  public executeScanCycle(
+    bufferView: BinaryIpcBufferView,
+    tagMap: PlcTagMap
+  ): void {
+    if (this.state !== 'CONNECTED') return;
+    this.scanCycles = (this.scanCycles + 1) >>> 0;
+    applyBindingsLocalScan(bufferView, tagMap, true);
   }
 }

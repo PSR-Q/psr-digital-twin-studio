@@ -1,6 +1,6 @@
 {
   "name": "psr-digital-twin-studio",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Standalone 3D Industrial Digital Twin & Virtual Commissioning Desktop Tool",
   "author": "VC Digital Twin Studio",
   "private": true,

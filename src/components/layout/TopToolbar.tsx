@@ -15,13 +15,22 @@ import {
   Route,
   Save,
   Sparkles,
+  Table2,
   Zap,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { runtimeBusClient } from '../../engine/runtimeBusClient';
+import type { PlcAdapterType, PlcConnectionState } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
 
 const SPEED_OPTIONS = [0.2, 0.5, 1.0, 2.0, 5.0];
+
+const SHORT_ADAPTER_LABEL: Record<PlcAdapterType, string> = {
+  InternalSimAdapter: 'InternalSim',
+  SiemensS7Adapter: 'S7-PLCSIM',
+  MitsubishiMcAdapter: 'MELSEC-3E',
+  OpcUaAdapter: 'OPC-UA',
+};
 
 export function TopToolbar() {
   const sceneName = useEditorStore((s) => s.scene.metadata.name);
@@ -29,6 +38,8 @@ export function TopToolbar() {
   const gizmoMode = useEditorStore((s) => s.gizmoMode);
   const runState = useEditorStore((s) => s.runState);
   const inspectorTab = useEditorStore((s) => s.inspectorTab);
+  const activeAdapter = useEditorStore((s) => s.scene.plcTagMap.activeAdapter);
+  const isTagMatrixModalOpen = useEditorStore((s) => s.isTagMatrixModalOpen);
   const forcedCount = useEditorStore(
     (s) => s.scene.plcTagMap.bindings.filter((b) => b.manualForceEnabled).length
   );
@@ -42,24 +53,37 @@ export function TopToolbar() {
   const saveSceneInteractive = useEditorStore((s) => s.saveSceneInteractive);
   const setGizmoMode = useEditorStore((s) => s.setGizmoMode);
   const setInspectorTab = useEditorStore((s) => s.setInspectorTab);
+  const setTagMatrixModalOpen = useEditorStore((s) => s.setTagMatrixModalOpen);
   const updateEnvironment = useEditorStore((s) => s.updateEnvironment);
   const setRunState = useEditorStore((s) => s.setRunState);
   const setSimSpeedMultiplier = useEditorStore((s) => s.setSimSpeedMultiplier);
 
   const [scanMs, setScanMs] = useState<number>(10.0);
-  const [plcConnected, setPlcConnected] = useState<boolean>(true);
+  const [connState, setConnState] = useState<PlcConnectionState>('CONNECTED');
 
   // Lightweight 4Hz telemetry readout for toolbar badge (never re-renders 3D scene!)
   useEffect(() => {
     const timer = window.setInterval(() => {
       const t = runtimeBusClient.readTelemetryFast();
+      const diag = runtimeBusClient.getDiagnostics();
       if (t.scanCycleMs > 0) {
         setScanMs(t.scanCycleMs);
+      } else if (diag.actualScanCycleMs > 0) {
+        setScanMs(diag.actualScanCycleMs);
       }
-      setPlcConnected(t.plcStatusCode === 2);
+      setConnState(diag.connectionState);
     }, 250);
     return () => window.clearInterval(timer);
   }, []);
+
+  const ledClass =
+    connState === 'CONNECTED'
+      ? 'vc-led-ok'
+      : connState === 'CONNECTING'
+        ? 'vc-led-warn'
+        : connState === 'FAULT'
+          ? 'vc-led-err'
+          : 'vc-led-off';
 
   return (
     <header id="vc-top-toolbar" className="vc-toolbar">
@@ -68,7 +92,7 @@ export function TopToolbar() {
         <div className="vc-brand-mark" title="Standalone 3D Industrial Virtual Commissioning">
           <Box size={16} />
           <span className="vc-brand-title">VC TWIN</span>
-          <span className="vc-milestone-tag">M3</span>
+          <span className="vc-milestone-tag">M4</span>
         </div>
 
         <div className="vc-scene-title-wrap">
@@ -232,7 +256,7 @@ export function TopToolbar() {
         </button>
       </div>
 
-      {/* Simulation Playback & PLC Scan Telemetry */}
+      {/* Simulation Playback, Tag Matrix & PLC Scan Telemetry */}
       <div className="vc-toolbar-section vc-toolbar-right">
         <div className="vc-segmented-group" role="group" aria-label="Simulation Controls">
           <button
@@ -292,22 +316,25 @@ export function TopToolbar() {
           title="Open Signal Force Console (Manual Actuator & Sensor Testing)"
         >
           <Zap size={13} />
-          <span>Force I/O{forcedCount > 0 ? ` (${forcedCount})` : ''}</span>
+          <span>Force{forcedCount > 0 ? ` (${forcedCount})` : ''}</span>
         </button>
 
-        <div
+        <button
           id="plc-telemetry-badge"
-          className="vc-plc-badge"
-          title="Dedicated Cyclic PLC Bus Status & Scan Period"
+          type="button"
+          className={`vc-plc-badge vc-plc-badge-btn ${
+            isTagMatrixModalOpen ? 'active' : ''
+          }`}
+          onClick={() => setTagMatrixModalOpen(!isTagMatrixModalOpen)}
+          title="Open Full I/O Tag Binding Matrix & Live PLC Driver Monitor"
         >
-          <span
-            className={`vc-led-dot ${plcConnected ? 'vc-led-ok' : 'vc-led-off'}`}
-          />
+          <span className={`vc-led-dot ${ledClass}`} />
           <Activity size={13} className="vc-plc-icon" />
           <span className="vc-mono-text">
-            InternalSim · {scanMs.toFixed(1)}ms
+            {SHORT_ADAPTER_LABEL[activeAdapter]} · {scanMs.toFixed(1)}ms
           </span>
-        </div>
+          <Table2 size={12} />
+        </button>
       </div>
     </header>
   );

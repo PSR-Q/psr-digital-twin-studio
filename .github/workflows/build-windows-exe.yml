@@ -52,14 +52,18 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.3.0-milestone3
-          name: "Milestone 3 — Spline Conveyors, Zero-Jitter Stopper Queue, Path Sensors & HSC Encoder (.exe)"
+          tag_name: v0.4.0-milestone4
+          name: "Milestone 4 (Complete Suite) — Live S7 / MELSEC 3E / OPC UA PLC Drivers & Full I/O Tag Matrix (.exe)"
           body: |
-            ### Milestone 3 Deliverable — Standalone Windows `.exe` (`v0.3.0`)
-            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.3.0-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
-            - **Included Features (Milestones 1 + 2 + 3):**
+            ### Milestone 4 Deliverable — Complete Standalone Windows `.exe` (`v0.4.0`)
+            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.4.0-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
+            - **Complete Virtual Commissioning Feature Set (Milestones 1 + 2 + 3 + 4):**
               1. **3D Layout & CAD Importer:** `.glb` / `.gltf` & **OpenUSD (`.usd`, `.usda`, `.usdc`, `.usdz`)** importer + Magnetic `SnapPort` docking + `.json` layout Save/Load
               2. **Component Builder & Signal Force Console:** Sub-mesh `LinearAxis` / `RotaryAxis` / `VisualEffect` (RPM belt drive) + 60–144Hz zero-re-render FK engine + standalone `Force I/O` console
-              3. **Directed Spline Conveyor Graph & Interactive 3D Path Drawing:** Draw Catmull-Rom / Polyline waypoints directly on 3D belts, auto-route across docked conveyors & rotating 90° Turntables, and spawn/accumulate 3D workpieces behind Pneumatic Stoppers with zero micro-jitter
-              4. **Deterministic Sub-Frame Path Sensors & Virtual HSC Encoders:** Live 3D `Photoelectric` laser beam & `Proximity` sensors (`BOOL`) + cumulative 32-bit `Encoder Pulse (DINT)` and `Servo Position / Velocity (REAL)` registers
+              3. **Directed Spline Conveyor Graph & Virtual HSC Encoders:** Catmull-Rom / Polyline 3D paths, zero-jitter Stopper accumulation, sub-frame `Photoelectric` / `Proximity` sensors (`BOOL`), and 32-bit `Encoder Pulse (DINT)` + `Servo Position (REAL)` registers
+              4. **Dedicated `UtilityProcess` Live PLC Engine & Full I/O Tag Binding Matrix:**
+                 - **Siemens S7 (`SiemensS7Adapter`):** Connects to **S7-PLCSIM Advanced / S7-1500 / S7-1200** via RFC1006 ISO-on-TCP (Port `102`, `I`/`Q`/`M`/`DB`) + PLCSIM Advanced Shared Memory / Pipe Bridge Hook
+                 - **Mitsubishi MELSEC (`MitsubishiMcAdapter`):** Connects to **GX Simulator3 / MX Component / iQ-R / Q / FX5U** via **3E Binary MC Protocol** (Batch Read `0401` & Random Write `1402` for `X`/`Y`/`M`/`L`/`B`/`D`/`W`/`R`)
+                 - **Omron / CODESYS / Universal (`OpcUaAdapter`):** Connects via **IEC 62541-6 OPC UA Binary TCP (`opc.tcp://`)** (`ns=2;s=...` / `ns=2;i=...`)
+                 - **Full-Width I/O Tag Binding Matrix:** 1-click vendor auto-addressing presets, CSV Tag Table Import/Export, `Scale` & `Offset` linear engineering scaling, live syntax validation, and bidirectional Manual Force Overrides
           files: release/*.exe

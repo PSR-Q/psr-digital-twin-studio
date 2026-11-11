@@ -8,7 +8,11 @@ import {
   type RuntimeInfoPayload,
   type SavedFileResult,
 } from '../src/shared/ipcChannels';
-import type { PlcTagMap } from '../src/shared/schemas';
+import type {
+  PlcConnectionAction,
+  PlcTagMap,
+  PlcWorkerDiagnostics,
+} from '../src/shared/schemas';
 
 const api: ElectronBridgeApi = {
   isElectron: true,
@@ -39,6 +43,10 @@ const api: ElectronBridgeApi = {
     ipcRenderer.send(IPC_CHANNELS.PLC_CONFIGURE_TAG_MAP, tagMap);
   },
 
+  sendPlcConnectionAction: (action: PlcConnectionAction): void => {
+    ipcRenderer.send(IPC_CHANNELS.PLC_CONNECTION_ACTION, action);
+  },
+
   pushBinaryCommandFrame: (frame: Uint8Array): void => {
     ipcRenderer.send(IPC_CHANNELS.PLC_BINARY_CMD_TO_WORKER, frame);
   },
@@ -50,6 +58,21 @@ const api: ElectronBridgeApi = {
     ipcRenderer.on(IPC_CHANNELS.PLC_BINARY_FRAME_TO_RENDERER, handler);
     return () => {
       ipcRenderer.removeListener(IPC_CHANNELS.PLC_BINARY_FRAME_TO_RENDERER, handler);
+    };
+  },
+
+  onPlcWorkerStatus: (
+    listener: (status: PlcWorkerDiagnostics) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      status: PlcWorkerDiagnostics
+    ): void => {
+      listener(status);
+    };
+    ipcRenderer.on(IPC_CHANNELS.PLC_WORKER_STATUS_TO_RENDERER, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.PLC_WORKER_STATUS_TO_RENDERER, handler);
     };
   },
 

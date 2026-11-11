@@ -3,6 +3,13 @@ import { create } from 'zustand';
 import { BUILTIN_COMPONENT_CATALOG } from '../engine/builtinCatalog';
 import { buildComponentDefinitionFromGlbBuffer } from '../engine/glbAssetRegistry';
 import type { JogPreviewState } from '../engine/kinematicsEngine';
+import {
+  exportTagBindingsToCsv,
+  generateVendorAddressesForBindings,
+  parseTagBindingsCsvPatch,
+  validatePlcAddress,
+  type VendorAddressPreset,
+} from '../engine/plcAddressSyntax';
 import { runtimeBusClient } from '../engine/runtimeBusClient';
 import {
   collectInstanceAllSignals,
@@ -25,11 +32,17 @@ import {
   isValidSceneSchema,
   type ComponentDefinition,
   type ComponentPathTemplate,
+  type MitsubishiMcDriverConfig,
+  type OpcUaDriverConfig,
   type PartSourceRuntimeConfig,
   type PathSensorBinding,
+  type PlcAdapterType,
+  type PlcConnectionAction,
+  type PlcTagBinding,
   type SceneEnvironmentConfig,
   type SceneNodeInstance,
   type SceneSchema,
+  type SiemensS7DriverConfig,
   type SimulationRunState,
   type SnapPortDefinition,
   type SubMeshRoleAssignment,
@@ -40,7 +53,12 @@ import {
 } from '../shared/schemas';
 
 export type GizmoTransformMode = 'translate' | 'rotate' | 'scale';
-export type InspectorTabMode = 'transform' | 'builder' | 'flow' | 'signals';
+export type InspectorTabMode =
+  | 'transform'
+  | 'builder'
+  | 'flow'
+  | 'signals'
+  | 'plc';
 
 function pickDefaultSubMesh(comp: ComponentDefinition | undefined): string | null {
   if (!comp) return null;
@@ -408,6 +426,26 @@ export interface EditorStoreState {
     patch: Partial<SnapPortDefinition>
   ) => void;
   deleteSnapPort: (componentId: UUID, portId: UUID) => void;
+
+  // Milestone 4: Live PLC Drivers & Full I/O Tag Binding Matrix
+  isTagMatrixModalOpen: boolean;
+  setTagMatrixModalOpen: (open: boolean) => void;
+  setPlcActiveAdapter: (
+    adapter: PlcAdapterType,
+    autoConvertAddresses?: boolean
+  ) => void;
+  setPlcScanCycleMs: (scanCycleMs: number) => void;
+  updateS7DriverConfig: (patch: Partial<SiemensS7DriverConfig>) => void;
+  updateMcDriverConfig: (patch: Partial<MitsubishiMcDriverConfig>) => void;
+  updateOpcUaDriverConfig: (patch: Partial<OpcUaDriverConfig>) => void;
+  updatePlcTagBinding: (
+    bindingId: UUID,
+    patch: Partial<Pick<PlcTagBinding, 'plcAddress' | 'scaleFactor' | 'offset'>>
+  ) => void;
+  applyPlcAddressPreset: (preset: VendorAddressPreset) => void;
+  triggerPlcConnectionAction: (action: PlcConnectionAction) => void;
+  exportPlcTagCsvInteractive: () => void;
+  importPlcTagCsvText: (csvText: string, sourceName?: string) => number;
 }
 
 function getCatalogMap(library: ComponentDefinition[]): Map<UUID, ComponentDefinition> {
@@ -461,7 +499,8 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
   scene: initialDemoScene,
   selectedInstanceId: 'inst-stopper-01',
   selectedSubMeshName: null,
-  inspectorTab: 'flow',
+  inspectorTab: 'plc',
+  isTagMatrixModalOpen: false,
   jogPreview: null,
   isDrawingSplinePath: false,
   gizmoMode: 'translate',
@@ -470,7 +509,7 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
   runState: 'STOPPED',
   isDirty: false,
   statusMessage:
-    'Milestone 3 Ready — Press Play (Space) to spawn boxes down the Spline Line, Force Stopper ON to queue parts, and monitor HSC Encoder (DINT) & Servo Position (REAL).',
+    'Milestone 4 Ready — Select PLC Driver (S7-PLCSIM Adv, MELSEC 3E GX Sim3, OPC UA, or InternalSim), map I/O addresses in the Tag Matrix, or press Play (Space).',
 
   selectInstance: (id) =>
     set((state) => {
@@ -2178,4 +2217,297 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         },
       };
     }),
+
+  // =========================================================================
+  // MILESTONE 4: LIVE PLC DRIVERS & FULL I/O TAG BINDING MATRIX ACTIONS
+  // =========================================================================
+
+  setTagMatrixModalOpen: (isTagMatrixModalOpen) => set({ isTagMatrixModalOpen }),
+
+  setPlcActiveAdapter: (adapter, autoConvertAddresses = true) => {
+    const state = get();
+    const prevMap = state.scene.plcTagMap;
+    let nextBindings = prevMap.bindings;
+    let autoRemappedLabel = '';
+
+    if (
+      autoConvertAddresses &&
+      adapter !== 'InternalSimAdapter' &&
+      prevMap.bindings.length > 0
+    ) {
+      const validCount = prevMap.bindings.filter(
+        (b) =>
+          validatePlcAddress(
+            adapter,
+            b.plcAddress,
+            b.dataType,
+            prevMap.opcUaConfig.namespaceIndex
+          ).valid
+      ).length;
+
+      if (validCount < Math.ceil(prevMap.bindings.length * 0.5)) {
+        const preset: VendorAddressPreset =
+          adapter === 'SiemensS7Adapter'
+            ? 's7-process-image'
+            : adapter === 'MitsubishiMcAdapter'
+              ? 'mitsubishi-xy-d'
+              : 'opcua-symbolic';
+        nextBindings = generateVendorAddressesForBindings(
+          prevMap.bindings,
+          preset,
+          prevMap.opcUaConfig.namespaceIndex
+        );
+        autoRemappedLabel = ` (auto-mapped ${nextBindings.length} tags to ${preset})`;
+      }
+    }
+
+    const nextTagMap = {
+      ...prevMap,
+      activeAdapter: adapter,
+      bindings: nextBindings,
+    };
+    runtimeBusClient.syncTagMap(nextTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        plcTagMap: nextTagMap,
+      },
+      statusMessage: `Switched PLC Engine Driver -> ${adapter}${autoRemappedLabel}.`,
+    });
+  },
+
+  setPlcScanCycleMs: (scanCycleMs) => {
+    const state = get();
+    const clamped = Math.max(5, Math.min(20, Math.round(scanCycleMs || 10)));
+    const nextTagMap = {
+      ...state.scene.plcTagMap,
+      scanCycleMs: clamped,
+    };
+    runtimeBusClient.syncTagMap(nextTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        plcTagMap: nextTagMap,
+      },
+      statusMessage: `Updated cyclic PLC scan period -> ${clamped} ms (${Math.round(1000 / clamped)} Hz).`,
+    });
+  },
+
+  updateS7DriverConfig: (patch) => {
+    const state = get();
+    const nextTagMap = {
+      ...state.scene.plcTagMap,
+      s7Config: {
+        ...state.scene.plcTagMap.s7Config,
+        ...patch,
+      },
+    };
+    runtimeBusClient.syncTagMap(nextTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        plcTagMap: nextTagMap,
+      },
+    });
+  },
+
+  updateMcDriverConfig: (patch) => {
+    const state = get();
+    const nextTagMap = {
+      ...state.scene.plcTagMap,
+      mcConfig: {
+        ...state.scene.plcTagMap.mcConfig,
+        ...patch,
+      },
+    };
+    runtimeBusClient.syncTagMap(nextTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        plcTagMap: nextTagMap,
+      },
+    });
+  },
+
+  updateOpcUaDriverConfig: (patch) => {
+    const state = get();
+    const nextTagMap = {
+      ...state.scene.plcTagMap,
+      opcUaConfig: {
+        ...state.scene.plcTagMap.opcUaConfig,
+        ...patch,
+      },
+    };
+    runtimeBusClient.syncTagMap(nextTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        plcTagMap: nextTagMap,
+      },
+    });
+  },
+
+  updatePlcTagBinding: (bindingId, patch) => {
+    const state = get();
+    const nextBindings = state.scene.plcTagMap.bindings.map((b) => {
+      if (b.id !== bindingId) return b;
+      const nextScale =
+        patch.scaleFactor !== undefined &&
+        Number.isFinite(patch.scaleFactor) &&
+        patch.scaleFactor !== 0
+          ? patch.scaleFactor
+          : b.scaleFactor;
+      const nextOffset =
+        patch.offset !== undefined && Number.isFinite(patch.offset)
+          ? patch.offset
+          : b.offset;
+      return {
+        ...b,
+        plcAddress: patch.plcAddress !== undefined ? patch.plcAddress : b.plcAddress,
+        scaleFactor: nextScale,
+        offset: nextOffset,
+      };
+    });
+
+    const nextTagMap = {
+      ...state.scene.plcTagMap,
+      bindings: nextBindings,
+    };
+    runtimeBusClient.syncTagMap(nextTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        plcTagMap: nextTagMap,
+      },
+    });
+  },
+
+  applyPlcAddressPreset: (preset) => {
+    const state = get();
+    const prevMap = state.scene.plcTagMap;
+    const nextBindings = generateVendorAddressesForBindings(
+      prevMap.bindings,
+      preset,
+      prevMap.opcUaConfig.namespaceIndex
+    );
+
+    const targetAdapter: PlcAdapterType =
+      preset === 's7-process-image' || preset === 's7-db1'
+        ? prevMap.activeAdapter === 'SiemensS7Adapter' ||
+          prevMap.activeAdapter === 'InternalSimAdapter'
+          ? prevMap.activeAdapter
+          : 'SiemensS7Adapter'
+        : preset === 'mitsubishi-xy-d'
+          ? prevMap.activeAdapter === 'MitsubishiMcAdapter' ||
+            prevMap.activeAdapter === 'InternalSimAdapter'
+            ? prevMap.activeAdapter
+            : 'MitsubishiMcAdapter'
+          : prevMap.activeAdapter === 'OpcUaAdapter' ||
+              prevMap.activeAdapter === 'InternalSimAdapter'
+            ? prevMap.activeAdapter
+            : 'OpcUaAdapter';
+
+    const nextTagMap = {
+      ...prevMap,
+      activeAdapter: targetAdapter,
+      bindings: nextBindings,
+    };
+    runtimeBusClient.syncTagMap(nextTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        plcTagMap: nextTagMap,
+      },
+      statusMessage: `Applied "${preset}" vendor address mapping across ${nextBindings.length} I/O signals.`,
+    });
+  },
+
+  triggerPlcConnectionAction: (action) => {
+    const state = get();
+    runtimeBusClient.sendConnectionAction(action);
+    set({
+      statusMessage: `PLC Driver [${state.scene.plcTagMap.activeAdapter}] -> ${action.toUpperCase()} requested.`,
+    });
+  },
+
+  exportPlcTagCsvInteractive: () => {
+    const state = get();
+    const csv = exportTagBindingsToCsv(state.scene.plcTagMap.bindings);
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    const safeName =
+      state.scene.metadata.name
+        .trim()
+        .replace(/[^A-Za-z0-9_-]+/g, '_')
+        .replace(/^_|_$/g, '') || 'vc_scene';
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${safeName}_plc_tags.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    set({
+      statusMessage: `Exported ${state.scene.plcTagMap.bindings.length} I/O tag bindings to ${safeName}_plc_tags.csv.`,
+    });
+  },
+
+  importPlcTagCsvText: (csvText, sourceName = 'CSV') => {
+    const state = get();
+    const patches = parseTagBindingsCsvPatch(csvText);
+    if (patches.size === 0) {
+      set({
+        statusMessage: `No valid PlcAddress rows found in ${sourceName}. Expected header with BindingId or SignalName + PlcAddress.`,
+      });
+      return 0;
+    }
+
+    let updatedCount = 0;
+    const nextBindings = state.scene.plcTagMap.bindings.map((b) => {
+      const patch = patches.get(b.id) ?? patches.get(`NAME::${b.signalName}`);
+      if (!patch) return b;
+      updatedCount++;
+      return {
+        ...b,
+        plcAddress: patch.plcAddress,
+        scaleFactor:
+          patch.scaleFactor !== undefined ? patch.scaleFactor : b.scaleFactor,
+        offset: patch.offset !== undefined ? patch.offset : b.offset,
+      };
+    });
+
+    const nextTagMap = {
+      ...state.scene.plcTagMap,
+      bindings: nextBindings,
+    };
+    runtimeBusClient.syncTagMap(nextTagMap);
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        plcTagMap: nextTagMap,
+      },
+      statusMessage: `Imported ${updatedCount} PLC tag address/scale bindings from ${sourceName}.`,
+    });
+    return updatedCount;
+  },
 }));

@@ -17,10 +17,16 @@ import {
   type RuntimeInfoPayload,
   type SavedFileResult,
 } from '../src/shared/ipcChannels';
-import type { PlcTagMap } from '../src/shared/schemas';
+import type {
+  PlcConnectionAction,
+  PlcTagMap,
+  PlcWorkerDiagnostics,
+} from '../src/shared/schemas';
 
 let mainWindow: BrowserWindow | null = null;
 let plcWorker: UtilityProcess | null = null;
+let cachedTagMap: PlcTagMap | null = null;
+let cachedControlCmd: PlcControlCommand | null = null;
 
 function spawnPlcUtilityWorker(): void {
   const workerScript = path.join(__dirname, 'worker', 'plcSyncWorker.cjs');
@@ -29,20 +35,42 @@ function spawnPlcUtilityWorker(): void {
       serviceName: 'VC-PLC-CyclicSync-Worker',
     });
 
-    plcWorker.on('message', (msg: { type?: string; frame?: Uint8Array }) => {
-      if (
-        msg?.type === 'plc-binary-frame' &&
-        msg.frame &&
-        mainWindow &&
-        !mainWindow.isDestroyed()
-      ) {
-        // Throttle UI telemetry push to ~30Hz while internal PLC loop runs at 100-200Hz
-        mainWindow.webContents.send(
-          IPC_CHANNELS.PLC_BINARY_FRAME_TO_RENDERER,
-          msg.frame
-        );
+    if (cachedTagMap) {
+      plcWorker.postMessage({
+        type: 'configure-tags',
+        tagMap: cachedTagMap,
+      });
+    }
+    if (cachedControlCmd) {
+      plcWorker.postMessage({
+        type: 'control',
+        runState: cachedControlCmd.runState,
+        simSpeedMultiplier: cachedControlCmd.simSpeedMultiplier,
+      });
+    }
+
+    plcWorker.on(
+      'message',
+      (msg: {
+        type?: string;
+        frame?: Uint8Array;
+        status?: PlcWorkerDiagnostics;
+      }) => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+
+        if (msg?.type === 'plc-binary-frame' && msg.frame) {
+          mainWindow.webContents.send(
+            IPC_CHANNELS.PLC_BINARY_FRAME_TO_RENDERER,
+            msg.frame
+          );
+        } else if (msg?.type === 'plc-worker-status' && msg.status) {
+          mainWindow.webContents.send(
+            IPC_CHANNELS.PLC_WORKER_STATUS_TO_RENDERER,
+            msg.status
+          );
+        }
       }
-    });
+    );
 
     plcWorker.on('exit', () => {
       plcWorker = null;
@@ -203,6 +231,7 @@ function registerIpcHandlers(): void {
   );
 
   ipcMain.on(IPC_CHANNELS.PLC_CONTROL_STATE, (_event, cmd: PlcControlCommand) => {
+    cachedControlCmd = cmd;
     plcWorker?.postMessage({
       type: 'control',
       runState: cmd.runState,
@@ -211,11 +240,25 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.on(IPC_CHANNELS.PLC_CONFIGURE_TAG_MAP, (_event, tagMap: PlcTagMap) => {
+    cachedTagMap = tagMap;
     plcWorker?.postMessage({
       type: 'configure-tags',
       tagMap,
     });
   });
+
+  ipcMain.on(
+    IPC_CHANNELS.PLC_CONNECTION_ACTION,
+    (_event, action: PlcConnectionAction) => {
+      if (!plcWorker) {
+        spawnPlcUtilityWorker();
+      }
+      plcWorker?.postMessage({
+        type: 'connection-action',
+        action,
+      });
+    }
+  );
 
   ipcMain.on(IPC_CHANNELS.PLC_BINARY_CMD_TO_WORKER, (_event, frame: Uint8Array) => {
     plcWorker?.postMessage({

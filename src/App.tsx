@@ -3,6 +3,7 @@ import { LeftDock } from './components/layout/LeftDock';
 import { RightInspector } from './components/layout/RightInspector';
 import { StatusBar } from './components/layout/StatusBar';
 import { TopToolbar } from './components/layout/TopToolbar';
+import { PlcTagMatrixModal } from './components/modals/PlcTagMatrixModal';
 import { ViewportCanvas } from './components/viewport/ViewportCanvas';
 import { runtimeBusClient } from './engine/runtimeBusClient';
 import { useEditorStore } from './store/editorStore';
@@ -16,9 +17,17 @@ export function App() {
     };
   }, []);
 
-  // Industrial CAD Keyboard Shortcuts (W/E/R Gizmo, Space Run/Pause, Del Remove, Ctrl+D Dup, Ctrl+S Save)
+  // Industrial CAD Keyboard Shortcuts (W/E/R Gizmo, Space Run/Pause, Del Remove, Ctrl+D Dup, Ctrl+S Save, Esc Close Modal)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      const store = useEditorStore.getState();
+
+      if (e.key === 'Escape' && store.isTagMatrixModalOpen) {
+        e.preventDefault();
+        store.setTagMatrixModalOpen(false);
+        return;
+      }
+
       const target = e.target as HTMLElement | null;
       if (
         target &&
@@ -29,8 +38,6 @@ export function App() {
       ) {
         return;
       }
-
-      const store = useEditorStore.getState();
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
@@ -96,6 +103,7 @@ export function App() {
         <RightInspector />
       </main>
       <StatusBar />
+      <PlcTagMatrixModal />
     </div>
   );
 }
