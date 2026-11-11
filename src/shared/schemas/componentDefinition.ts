@@ -114,6 +114,8 @@ export interface VisualEffectRole {
   effectType: 'uv-scroll' | 'emissive-lamp' | 'particle-spray' | 'tank-level';
   uvScrollAxis?: 'u' | 'v';
   uvScrollScale?: number;
+  /** Nominal belt drive speed in RPM (default 60 RPM) for uv-scroll conveyors */
+  nominalRpm?: number;
   emissiveOnHex?: string;
   emissiveOffHex?: string;
   behavior?: ProcessTankValvePreset;

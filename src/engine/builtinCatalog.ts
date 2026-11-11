@@ -22,6 +22,7 @@ const CONVEYOR_NODE_ROLES: Record<string, SubMeshRoleAssignment> = {
     effectType: 'uv-scroll',
     uvScrollAxis: 'u',
     uvScrollScale: 1.0,
+    nominalRpm: 60,
   },
   Drive_Motor_Unit: { role: 'StaticMesh', nodeName: 'Drive_Motor_Unit' },
 };

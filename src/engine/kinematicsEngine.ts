@@ -106,8 +106,10 @@ interface VisualEffectRuntime {
   emissiveOffColor: THREE.Color;
   autoLinkReedLamp: boolean;
   currentLevelPct: number;
+  actualBeltRpm: number;
   doBeltRunSlot: number;
-  aoSpeedPctSlot: number;
+  aoBeltSpeedRpmSlot: number;
+  aiActualBeltRpmSlot: number;
   doLampOnSlot: number;
   aoLevelPctSlot: number;
 }
@@ -503,6 +505,7 @@ export function buildKinematicsRig(
         }
       }
 
+      const rpmCmdSlot = slotOf(assignment.nodeName, 'AO_BeltSpeedRpm');
       activeRuntimes.push({
         kind: 'VisualEffect',
         nodeRecord,
@@ -513,8 +516,11 @@ export function buildKinematicsRig(
         emissiveOffColor: new THREE.Color(assignment.emissiveOffHex || '#1e293b'),
         autoLinkReedLamp: /reed/i.test(assignment.nodeName),
         currentLevelPct: 50,
+        actualBeltRpm: 0,
         doBeltRunSlot: slotOf(assignment.nodeName, 'DO_BeltRun'),
-        aoSpeedPctSlot: slotOf(assignment.nodeName, 'AO_SpeedPct'),
+        aoBeltSpeedRpmSlot:
+          rpmCmdSlot >= 0 ? rpmCmdSlot : slotOf(assignment.nodeName, 'AO_SpeedPct'),
+        aiActualBeltRpmSlot: slotOf(assignment.nodeName, 'AI_ActualBeltRpm'),
         doLampOnSlot: slotOf(assignment.nodeName, 'DO_LampOn'),
         aoLevelPctSlot: slotOf(assignment.nodeName, 'AO_LevelPct'),
       });
@@ -845,25 +851,43 @@ export function stepKinematicsRig(
       const { role } = rt;
 
       if (role.effectType === 'uv-scroll') {
-        const beltRun =
-          runState === 'RUNNING' &&
-          rt.doBeltRunSlot >= 0 &&
-          bufferView.readPlcToSimBool(rt.doBeltRunSlot);
-        if (beltRun && dt > 0) {
-          const speedPct =
-            rt.aoSpeedPctSlot >= 0
-              ? bufferView.readFloat32(rt.aoSpeedPctSlot)
-              : 100;
-          const scrollDelta =
-            (speedPct / 100) * (role.uvScrollScale ?? 1.0) * 0.95 * dt;
-          for (let t = 0; t < rt.scrollTextures.length; t++) {
-            const tex = rt.scrollTextures[t];
-            if (role.uvScrollAxis === 'v') {
-              tex.offset.y = (tex.offset.y - scrollDelta) % 1;
-            } else {
-              tex.offset.x = (tex.offset.x - scrollDelta) % 1;
+        if (runState === 'STOPPED') {
+          rt.actualBeltRpm = 0;
+        } else if (dt > 0) {
+          const beltRun =
+            rt.doBeltRunSlot >= 0 && bufferView.readPlcToSimBool(rt.doBeltRunSlot);
+          const nominalRpm = Math.max(1, role.nominalRpm ?? 60);
+          const setpointRpm =
+            rt.aoBeltSpeedRpmSlot >= 0
+              ? Math.max(0, bufferView.readFloat32(rt.aoBeltSpeedRpmSlot))
+              : nominalRpm;
+          const targetRpm = beltRun ? setpointRpm : 0;
+
+          // Smooth conveyor motor inertia ramp (260 RPM/s)
+          const rpmDiff = targetRpm - rt.actualBeltRpm;
+          const maxStepRpm = 260 * dt;
+          rt.actualBeltRpm =
+            Math.abs(rpmDiff) <= maxStepRpm
+              ? targetRpm
+              : rt.actualBeltRpm + Math.sign(rpmDiff) * maxStepRpm;
+
+          if (Math.abs(rt.actualBeltRpm) > 0.01) {
+            // 60 RPM drive drum (~150mm dia -> ~0.47 m/s belt speed -> ~1.32 chevron tiles/s)
+            const scrollDelta =
+              (rt.actualBeltRpm / 60) * (role.uvScrollScale ?? 1.0) * 1.32 * dt;
+            for (let t = 0; t < rt.scrollTextures.length; t++) {
+              const tex = rt.scrollTextures[t];
+              if (role.uvScrollAxis === 'v') {
+                tex.offset.y = (tex.offset.y - scrollDelta) % 1;
+              } else {
+                tex.offset.x = (tex.offset.x - scrollDelta) % 1;
+              }
             }
           }
+        }
+
+        if (rt.aiActualBeltRpmSlot >= 0) {
+          bufferView.writeFloat32(rt.aiActualBeltRpmSlot, rt.actualBeltRpm);
         }
       } else if (role.effectType === 'emissive-lamp') {
         const manualForced =

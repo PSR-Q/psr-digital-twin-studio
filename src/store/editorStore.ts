@@ -528,12 +528,16 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         const hasModernNodeKeys = comp.exposedSignals.some((s) =>
           s.key.includes('::')
         );
-        const upgradedComp: ComponentDefinition = hasModernNodeKeys
-          ? comp
-          : {
-              ...comp,
-              exposedSignals: synthesizeComponentSignals(comp.nodeRoles),
-            };
+        const hasLegacyBeltPct = comp.exposedSignals.some((s) =>
+          s.key.endsWith('::AO_SpeedPct')
+        );
+        const upgradedComp: ComponentDefinition =
+          hasModernNodeKeys && !hasLegacyBeltPct
+            ? comp
+            : {
+                ...comp,
+                exposedSignals: synthesizeComponentSignals(comp.nodeRoles),
+              };
         mergedMap.set(upgradedComp.id, upgradedComp);
       }
       const mergedLibrary = Array.from(mergedMap.values());

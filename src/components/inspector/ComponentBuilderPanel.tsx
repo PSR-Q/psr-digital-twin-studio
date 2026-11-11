@@ -160,6 +160,7 @@ export function ComponentBuilderPanel({
         effectType: likelyLamp ? 'emissive-lamp' : 'uv-scroll',
         uvScrollAxis: 'u',
         uvScrollScale: 1.0,
+        nominalRpm: 60,
         emissiveOnHex: '#10b981',
         emissiveOffHex: '#334155',
       };
@@ -888,8 +889,8 @@ export function ComponentBuilderPanel({
               </div>
 
               {activeAssignment.effectType === 'uv-scroll' && (
-                <div className="vc-two-col-grid">
-                  <label className="vc-axis-input-wrap">
+                <div className="vc-vec3-grid">
+                  <label className="vc-axis-input-wrap" title="UV Scroll Direction">
                     <span className="vc-axis-badge">AXIS</span>
                     <select
                       className="vc-inline-select"
@@ -904,8 +905,29 @@ export function ComponentBuilderPanel({
                       <option value="v">V (Y)</option>
                     </select>
                   </label>
-                  <label className="vc-axis-input-wrap">
-                    <span className="vc-axis-badge">SPD</span>
+                  <label
+                    className="vc-axis-input-wrap"
+                    title="Nominal Belt Drive Speed (RPM)"
+                  >
+                    <span className="vc-axis-badge">RPM</span>
+                    <input
+                      id="input-uv-nominal-rpm"
+                      type="number"
+                      min={1}
+                      step={5}
+                      value={activeAssignment.nominalRpm ?? 60}
+                      onChange={(e) =>
+                        updateVisualPatch({
+                          nominalRpm: Math.max(1, Number(e.target.value) || 60),
+                        })
+                      }
+                    />
+                  </label>
+                  <label
+                    className="vc-axis-input-wrap"
+                    title="UV Texture Speed Scale Multiplier"
+                  >
+                    <span className="vc-axis-badge">SCL</span>
                     <input
                       type="number"
                       step={0.2}

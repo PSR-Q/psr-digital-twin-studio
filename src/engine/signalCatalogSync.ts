@@ -221,6 +221,8 @@ export function synthesizeComponentSignals(
       }
     } else if (assignment.role === 'VisualEffect') {
       if (assignment.effectType === 'uv-scroll') {
+        const nominalRpm = Math.max(1, assignment.nominalRpm ?? 60);
+        const maxRpm = Math.max(300, Math.round(nominalRpm * 2.5));
         signals.push(
           {
             key: makeNodeSignalKey(nodeName, 'DO_BeltRun'),
@@ -230,15 +232,26 @@ export function synthesizeComponentSignals(
             nodeName,
           },
           {
-            key: makeNodeSignalKey(nodeName, 'AO_SpeedPct'),
+            key: makeNodeSignalKey(nodeName, 'AO_BeltSpeedRpm'),
             label: `${readable} · Belt Speed`,
             direction: 'PLC_TO_SIM',
             dataType: 'FLOAT32',
             nodeName,
-            unit: '%',
+            unit: 'RPM',
             minVal: 0,
-            maxVal: 200,
-            defaultVal: 100,
+            maxVal: maxRpm,
+            defaultVal: nominalRpm,
+          },
+          {
+            key: makeNodeSignalKey(nodeName, 'AI_ActualBeltRpm'),
+            label: `${readable} · Actual Belt Speed`,
+            direction: 'SIM_TO_PLC',
+            dataType: 'FLOAT32',
+            nodeName,
+            unit: 'RPM',
+            minVal: 0,
+            maxVal: maxRpm,
+            defaultVal: 0,
           }
         );
       } else if (assignment.effectType === 'emissive-lamp') {
@@ -407,6 +420,11 @@ export function syncPlcTagMapWithScene(
         used.add(slot);
       }
 
+      const legacyKey = sig.key.endsWith('::AO_BeltSpeedRpm')
+        ? `${inst.id}::${sig.key.replace(/::AO_BeltSpeedRpm$/, '::AO_SpeedPct')}`
+        : null;
+      const legacyPrev = legacyKey ? existingByCompositeKey.get(legacyKey) : undefined;
+
       const defaultForceVal: boolean | number =
         sig.dataType === 'BOOL' ? false : (sig.defaultVal ?? 0);
 
@@ -418,13 +436,17 @@ export function syncPlcTagMapWithScene(
         direction: sig.direction,
         dataType: sig.dataType,
         plcAddress:
-          prev?.plcAddress || formatDefaultPlcAddress(sig.direction, sig.dataType, slot),
+          prev?.plcAddress ||
+          legacyPrev?.plcAddress ||
+          formatDefaultPlcAddress(sig.direction, sig.dataType, slot),
         bufferSlotIndex: slot,
         scaleFactor: prev?.scaleFactor ?? 1,
         offset: prev?.offset ?? 0,
         manualForceEnabled: prev?.manualForceEnabled ?? false,
         manualForceValue:
-          prev !== undefined && prev.dataType === sig.dataType
+          prev !== undefined &&
+          prev.manualForceEnabled &&
+          prev.dataType === sig.dataType
             ? prev.manualForceValue
             : defaultForceVal,
       });
