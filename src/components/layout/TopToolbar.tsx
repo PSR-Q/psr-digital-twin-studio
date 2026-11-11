@@ -12,6 +12,7 @@ import {
   Move,
   Pause,
   Play,
+  Power,
   RotateCcw,
   RotateCw,
   Route,
@@ -47,6 +48,7 @@ export function TopToolbar() {
   const inspectorTab = useEditorStore((s) => s.inspectorTab);
   const activeAdapter = useEditorStore((s) => s.scene.plcTagMap.activeAdapter);
   const isTagMatrixModalOpen = useEditorStore((s) => s.isTagMatrixModalOpen);
+  const spawners = useEditorStore((s) => s.scene.transportGraph.spawners);
   const forcedCount = useEditorStore(
     (s) => s.scene.plcTagMap.bindings.filter((b) => b.manualForceEnabled).length
   );
@@ -64,6 +66,10 @@ export function TopToolbar() {
   const updateEnvironment = useEditorStore((s) => s.updateEnvironment);
   const setRunState = useEditorStore((s) => s.setRunState);
   const setSimSpeedMultiplier = useEditorStore((s) => s.setSimSpeedMultiplier);
+  const setAllSpawnersEnabled = useEditorStore((s) => s.setAllSpawnersEnabled);
+
+  const hasFeeders = spawners.length > 0;
+  const anyFeederEnabled = spawners.some((sp) => sp.enabled !== false);
 
   const [scanMs, setScanMs] = useState<number>(10.0);
   const [connState, setConnState] = useState<PlcConnectionState>('CONNECTED');
@@ -479,6 +485,25 @@ export function TopToolbar() {
             </option>
           ))}
         </select>
+
+        {hasFeeders && (
+          <button
+            id="btn-toolbar-toggle-feeder"
+            type="button"
+            className={`vc-tool-btn vc-feeder-toggle-btn ${
+              anyFeederEnabled ? 'vc-feeder-on' : 'vc-feeder-off'
+            }`}
+            onClick={() => setAllSpawnersEnabled(!anyFeederEnabled)}
+            title={
+              anyFeederEnabled
+                ? 'Part Feeder is ON (Auto-feeding workpieces) — Click to turn OFF'
+                : 'Part Feeder is OFF (Paused) — Click to turn ON'
+            }
+          >
+            <Power size={12} />
+            <span>Feeder: {anyFeederEnabled ? 'ON' : 'OFF'}</span>
+          </button>
+        )}
 
         <button
           id="btn-toolbar-force-io"

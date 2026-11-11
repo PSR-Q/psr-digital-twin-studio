@@ -52,13 +52,13 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.4.3-stopper-gate
-          name: "v0.4.3 — Calibrated Under-Belt Pop-Up Stopper Gate & Conveyor-Flush OpenUSD Portal (.exe)"
+          tag_name: v0.4.4-part-feeder
+          name: "v0.4.4 — Part Feeder ON / OFF Power Controls + DO_FeedEnable PLC Tag (.exe)"
           body: |
-            ### v0.4.3 Deliverable — Standalone Windows `.exe` (`VC-Digital-Twin-Studio-0.4.3-Portable.exe`)
-            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.4.3-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
-            - **New in `v0.4.3` — Calibrated Conveyor-Level Stopper Gate & OpenUSD Portal Geometry:**
-              - **Under-Belt Pop-Up `Pneumatic Blade Stopper` (`0.78m` Pass-Through Deck):** Cylinder barrel tucked cleanly underneath the conveyor; retracted (`0 mm`) stopper blade sits `5 mm` below the `0.80m` belt surface so workpieces glide smoothly across, and extended (`+95 mm`) pops up to `0.888m` with zero under-blade gap.
-              - **Lowered Conveyor-Integrated `Cartesian Pick & Place (OpenUSD)`:** Portal height lowered from `1.63m` to `1.30m` with a built-in `0.78m` `Pass_Conveyor_Bed` & side rails (eliminating floating mid-air gaps when docked between conveyors) and calibrated `165 mm` vertical mast stroke down to the `0.80m` belt surface.
-            - **Includes `v0.4.2` SketchUp White / Sky / Dark Viewport Themes, `v0.4.1` Workpiece Catalog & Belt Drag-and-Drop, and Full Milestones 1–4 Suite.**
+            ### v0.4.4 Deliverable — Standalone Windows `.exe` (`VC-Digital-Twin-Studio-0.4.4-Portable.exe`)
+            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.4.4-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
+            - **New in `v0.4.4` — Instant `Part Feeder` ON / OFF Controls & `DO_FeedEnable` PLC Tag:**
+              - **Toggle `Part Feeder` ON / OFF Anywhere (Without Losing Settings):** Switch automatic part feeding ON or OFF with 1 click from the **Top Toolbar (`Feeder: ON/OFF`)**, **Left Workpieces Dock (`Feeder ON/OFF`)**, **Scene Hierarchy (`Feed ON/OFF`)**, **Right Flow Inspector (`Auto Feed: ON/OFF` + `+1 Part`)**, **Force I/O Console (`Part Feeder · Auto Feed Run`)**, or by **clicking the 3D Feeder Portal Ring** directly on the conveyor!
+              - **PLC & Force I/O Signal (`DO_FeedEnable`):** Exposes `Part Feeder · Auto Feed Run` (`BOOL`, `PLC_TO_SIM`) alongside `Part Feeder · Trigger 1 Part` (`DO_SpawnTrigger`) so PLCs or manual forces can start/pause feeding deterministically.
+            - **Includes `v0.4.3` Calibrated Pop-Up Stopper Gate & OpenUSD Portal Heights, `v0.4.2` SketchUp White / Sky / Dark Viewport Themes, `v0.4.1` Workpiece Belt Drag-and-Drop, and Full Milestones 1–4 Suite.**
           files: release/*.exe

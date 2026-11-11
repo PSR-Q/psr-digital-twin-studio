@@ -25,6 +25,7 @@ import {
   makeSensorSignalKey,
   makeSinkCountKey,
   makeSpawnerCountKey,
+  makeSpawnerEnableKey,
   makeSpawnerTriggerKey,
   syncPlcTagMapWithScene,
 } from './signalCatalogSync';
@@ -460,6 +461,9 @@ export function syncSceneTransportAndSignals(params: {
 
   const boundSpawners: PartSourceRuntimeConfig[] = spawners.map((sp) => ({
     ...sp,
+    enabled: sp.enabled !== false,
+    enableBoolSlot:
+      slotByComposite.get(`${sp.instanceId}::${makeSpawnerEnableKey(sp.id)}`) ?? -1,
     triggerBoolSlot:
       slotByComposite.get(`${sp.instanceId}::${makeSpawnerTriggerKey(sp.id)}`) ?? -1,
     spawnedCountDintSlot:

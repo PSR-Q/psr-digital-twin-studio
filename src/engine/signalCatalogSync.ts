@@ -27,6 +27,10 @@ export function makeSensorSignalKey(sensorId: UUID): string {
   return `SENSOR::${sensorId}::DI_Triggered`;
 }
 
+export function makeSpawnerEnableKey(spawnerId: UUID): string {
+  return `FLOW::${spawnerId}::DO_FeedEnable`;
+}
+
 export function makeSpawnerTriggerKey(spawnerId: UUID): string {
   return `FLOW::${spawnerId}::DO_SpawnTrigger`;
 }
@@ -327,8 +331,15 @@ export function collectInstanceFlowSignals(
     if (spawner.instanceId !== instanceId) continue;
     list.push(
       {
+        key: makeSpawnerEnableKey(spawner.id),
+        label: 'Part Feeder · Auto Feed Run',
+        direction: 'PLC_TO_SIM',
+        dataType: 'BOOL',
+        defaultBool: spawner.enabled !== false,
+      },
+      {
         key: makeSpawnerTriggerKey(spawner.id),
-        label: 'Part Feeder · Trigger Spawn',
+        label: 'Part Feeder · Trigger 1 Part',
         direction: 'PLC_TO_SIM',
         dataType: 'BOOL',
         defaultBool: false,

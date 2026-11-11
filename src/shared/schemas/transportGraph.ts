@@ -69,9 +69,12 @@ export interface PartSourceRuntimeConfig {
   id: UUID;
   instanceId: UUID;
   targetPathNodeId: UUID;
+  /** Whether automatic part feeding is currently ON (defaults to true when omitted) */
+  enabled?: boolean;
   mode: 'interval' | 'plc-trigger';
   intervalSec: number;
   maxActiveItems?: number;
+  enableBoolSlot?: number;
   triggerBoolSlot?: number;
   spawnedCountDintSlot?: number;
   partShape?: WorkpieceShapeType;

@@ -10,6 +10,7 @@ import {
   Lock,
   Package,
   Plus,
+  Power,
   Trash2,
   Unlock,
 } from 'lucide-react';
@@ -23,7 +24,7 @@ import {
   BUILTIN_WORKPIECE_PRESETS,
   computeWorkpieceDimensionsFromComponent,
 } from '../../engine/workpieceCatalog';
-import type { ComponentCategory } from '../../shared/schemas';
+import type { ComponentCategory, PartSourceRuntimeConfig } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
 
 type CatalogFilterKey = 'ALL' | 'WORKPIECES' | ComponentCategory;
@@ -43,17 +44,30 @@ export function LeftDock() {
   const library = useEditorStore((s) => s.scene.componentLibrary);
   const instances = useEditorStore((s) => s.scene.instances);
   const snapConnections = useEditorStore((s) => s.scene.snapConnections);
+  const spawners = useEditorStore((s) => s.scene.transportGraph.spawners);
   const selectedInstanceId = useEditorStore((s) => s.selectedInstanceId);
 
   const spawnInstance = useEditorStore((s) => s.spawnInstance);
   const dropWorkpieceQuick = useEditorStore((s) => s.dropWorkpieceQuick);
   const clearAllActiveFlowItems = useEditorStore((s) => s.clearAllActiveFlowItems);
+  const setAllSpawnersEnabled = useEditorStore((s) => s.setAllSpawnersEnabled);
+  const updateInstanceSpawner = useEditorStore((s) => s.updateInstanceSpawner);
   const importGlbInteractive = useEditorStore((s) => s.importGlbInteractive);
   const selectInstance = useEditorStore((s) => s.selectInstance);
   const toggleInstanceVisibility = useEditorStore((s) => s.toggleInstanceVisibility);
   const toggleInstanceLock = useEditorStore((s) => s.toggleInstanceLock);
   const duplicateInstance = useEditorStore((s) => s.duplicateInstance);
   const deleteInstance = useEditorStore((s) => s.deleteInstance);
+
+  const spawnerByInstance = useMemo(() => {
+    const map = new Map<string, PartSourceRuntimeConfig>();
+    for (const sp of spawners) {
+      map.set(sp.instanceId, sp);
+    }
+    return map;
+  }, [spawners]);
+
+  const anyFeederEnabled = spawners.some((sp) => sp.enabled !== false);
 
   const filteredCatalog = useMemo(() => {
     if (activeCategory === 'WORKPIECES') return [];
@@ -123,17 +137,37 @@ export function LeftDock() {
               <div className="vc-catalog-subhead">
                 <span className="vc-catalog-subhead-title">
                   <Package size={11} />
-                  <span>WORKPIECES — DRAG ONTO CONVEYOR BELT</span>
+                  <span>WORKPIECES — DRAG ONTO BELT</span>
                 </span>
-                <button
-                  id="btn-catalog-clear-workpieces"
-                  type="button"
-                  className="vc-catalog-inline-clear"
-                  onClick={clearAllActiveFlowItems}
-                  title="Clear all active workpieces from conveyor belts"
-                >
-                  Clear
-                </button>
+                <div className="vc-catalog-subhead-actions">
+                  {spawners.length > 0 && (
+                    <button
+                      id="btn-workpieces-toggle-feeder"
+                      type="button"
+                      className={`vc-catalog-inline-feeder ${
+                        anyFeederEnabled ? 'on' : 'off'
+                      }`}
+                      onClick={() => setAllSpawnersEnabled(!anyFeederEnabled)}
+                      title={
+                        anyFeederEnabled
+                          ? 'Auto Part Feeder is ON — Click to turn OFF when testing manual drag-and-drop'
+                          : 'Auto Part Feeder is OFF — Click to turn ON automatic feeding'
+                      }
+                    >
+                      <Power size={9} />
+                      <span>Feeder {anyFeederEnabled ? 'ON' : 'OFF'}</span>
+                    </button>
+                  )}
+                  <button
+                    id="btn-catalog-clear-workpieces"
+                    type="button"
+                    className="vc-catalog-inline-clear"
+                    onClick={clearAllActiveFlowItems}
+                    title="Clear all active workpieces from conveyor belts"
+                  >
+                    Clear
+                  </button>
+                </div>
               </div>
 
               {BUILTIN_WORKPIECE_PRESETS.map((wp) => {
@@ -395,6 +429,8 @@ export function LeftDock() {
             instances.map((inst) => {
               const isSelected = inst.id === selectedInstanceId;
               const linkCount = snapCountByInstance.get(inst.id) ?? 0;
+              const rowSpawner = spawnerByInstance.get(inst.id);
+              const rowFeederOn = rowSpawner ? rowSpawner.enabled !== false : false;
 
               return (
                 <div
@@ -413,6 +449,25 @@ export function LeftDock() {
                       }
                     />
                     <span className="vc-tree-label">{inst.name}</span>
+                    {rowSpawner && (
+                      <button
+                        id={`tree-feeder-btn-${inst.id}`}
+                        type="button"
+                        className={`vc-tree-feeder-pill ${rowFeederOn ? 'on' : 'off'}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          updateInstanceSpawner(inst.id, { enabled: !rowFeederOn });
+                        }}
+                        title={
+                          rowFeederOn
+                            ? 'Part Feeder is ON — Click to turn OFF'
+                            : 'Part Feeder is OFF — Click to turn ON'
+                        }
+                      >
+                        <Power size={8} />
+                        <span>{rowFeederOn ? 'Feed ON' : 'Feed OFF'}</span>
+                      </button>
+                    )}
                     {linkCount > 0 && (
                       <span className="vc-tree-link-badge">{linkCount}</span>
                     )}

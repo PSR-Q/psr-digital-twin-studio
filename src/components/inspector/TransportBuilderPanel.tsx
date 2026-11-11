@@ -7,6 +7,7 @@ import {
   GitBranch,
   Play,
   Plus,
+  Power,
   Radio,
   RotateCcw,
   Route,
@@ -104,6 +105,8 @@ export function TransportBuilderPanel({
     (s) => s.setInstanceFlowEndpointRole
   );
   const updateInstanceSpawner = useEditorStore((s) => s.updateInstanceSpawner);
+  const setAllSpawnersEnabled = useEditorStore((s) => s.setAllSpawnersEnabled);
+  const triggerManualSpawnNow = useEditorStore((s) => s.triggerManualSpawnNow);
   const dropWorkpieceQuick = useEditorStore((s) => s.dropWorkpieceQuick);
   const clearAllActiveFlowItems = useEditorStore((s) => s.clearAllActiveFlowItems);
 
@@ -297,6 +300,88 @@ export function TransportBuilderPanel({
             </strong>
           </div>
         </div>
+
+        {/* Plant Part Feeders Quick Power Card (ON / OFF + Manual Single Feed) */}
+        {transportGraph.spawners.length > 0 && (
+          <div className="vc-inspector-card">
+            <div className="vc-section-header-row">
+              <span className="vc-section-label">
+                <Sparkles size={12} className="vc-emerald-text" />
+                <span>PART FEEDERS ({transportGraph.spawners.length})</span>
+              </span>
+              {transportGraph.spawners.length > 1 && (
+                <button
+                  id="btn-flow-global-toggle-all-feeders"
+                  type="button"
+                  className="vc-port-add-btn"
+                  onClick={() =>
+                    setAllSpawnersEnabled(
+                      !transportGraph.spawners.some((sp) => sp.enabled !== false)
+                    )
+                  }
+                >
+                  <Power size={10} /> Toggle All
+                </button>
+              )}
+            </div>
+
+            <div className="vc-encoder-list">
+              {transportGraph.spawners.map((sp) => {
+                const isOn = sp.enabled !== false;
+                const machineName =
+                  instanceNameById.get(sp.instanceId) ?? sp.instanceId;
+                return (
+                  <div
+                    key={sp.id}
+                    className={`vc-feeder-power-bar ${isOn ? 'on' : 'off'}`}
+                  >
+                    <button
+                      type="button"
+                      className="vc-machine-focus-btn vc-feeder-power-meta"
+                      onClick={() => selectInstance(sp.instanceId)}
+                      title="Select feeder conveyor in 3D Viewport"
+                    >
+                      <strong>{machineName}</strong>
+                      <small>
+                        {isOn
+                          ? `Auto Feed ON (${sp.intervalSec}s)`
+                          : 'Paused (OFF)'}{' '}
+                        · {(live.spawnerCounts[sp.id] ?? 0).toLocaleString()} pcs
+                      </small>
+                    </button>
+                    <div className="vc-feeder-power-actions">
+                      <button
+                        id={`btn-global-feeder-toggle-${sp.id}`}
+                        type="button"
+                        className={`vc-force-latch-btn ${isOn ? 'on' : 'off'}`}
+                        onClick={() =>
+                          updateInstanceSpawner(sp.instanceId, { enabled: !isOn })
+                        }
+                        title={
+                          isOn
+                            ? 'Turn Part Feeder OFF (pause automatic spawning)'
+                            : 'Turn Part Feeder ON (start automatic spawning)'
+                        }
+                      >
+                        <Power size={10} />
+                        <span>{isOn ? 'ON' : 'OFF'}</span>
+                      </button>
+                      <button
+                        id={`btn-global-feeder-single-${sp.id}`}
+                        type="button"
+                        className="vc-port-add-btn"
+                        onClick={() => triggerManualSpawnNow(sp.instanceId)}
+                        title="Feed 1 workpiece manually onto conveyor now"
+                      >
+                        <Plus size={10} /> 1
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* All Plant Virtual HSC Encoders & Servo Positions */}
         <div className="vc-inspector-card">
@@ -939,6 +1024,51 @@ export function TransportBuilderPanel({
 
           {instanceSpawner && (
             <div className="vc-joint-form">
+              <div
+                className={`vc-feeder-power-bar ${
+                  instanceSpawner.enabled !== false ? 'on' : 'off'
+                }`}
+              >
+                <div className="vc-feeder-power-meta">
+                  <strong>
+                    Auto Feed:{' '}
+                    {instanceSpawner.enabled !== false ? 'ON (กำลังปล่อยชิ้นงาน)' : 'OFF (หยุดพักชั่วคราว)'}
+                  </strong>
+                  <small>
+                    {instanceSpawner.enabled !== false
+                      ? `ปล่อยทุก ${instanceSpawner.intervalSec}s เมื่อกด Play`
+                      : 'ปิด Auto Feed เพื่อทดสอบวางชิ้นงานเองได้'}
+                  </small>
+                </div>
+                <div className="vc-feeder-power-actions">
+                  <button
+                    id="btn-inspector-feeder-power"
+                    type="button"
+                    className={`vc-force-latch-btn ${
+                      instanceSpawner.enabled !== false ? 'on' : 'off'
+                    }`}
+                    onClick={() =>
+                      updateInstanceSpawner(instance.id, {
+                        enabled: !(instanceSpawner.enabled !== false),
+                      })
+                    }
+                    title="Turn automatic Part Feeder ON or OFF without losing feeder settings"
+                  >
+                    <Power size={10} />
+                    <span>{instanceSpawner.enabled !== false ? 'ON' : 'OFF'}</span>
+                  </button>
+                  <button
+                    id="btn-inspector-feed-single"
+                    type="button"
+                    className="vc-port-add-btn"
+                    onClick={() => triggerManualSpawnNow(instance.id)}
+                    title="Feed 1 workpiece manually onto this conveyor right now"
+                  >
+                    <Plus size={10} /> 1 Part
+                  </button>
+                </div>
+              </div>
+
               <div className="vc-field-row">
                 <span>Workpiece Type</span>
                 <select

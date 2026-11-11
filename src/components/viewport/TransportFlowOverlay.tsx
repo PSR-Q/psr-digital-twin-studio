@@ -379,6 +379,8 @@ export const TransportFlowOverlay = memo(function TransportFlowOverlay() {
         sampleWorldPathPose(lut, Math.min(120, lut.arcLengthMm * 0.15), p, q);
         return {
           id: sp.id,
+          instanceId: sp.instanceId,
+          enabled: sp.enabled !== false,
           position: [p.x, p.y + 0.12, p.z] as [number, number, number],
           quaternion: [q.x, q.y, q.z, q.w] as [number, number, number, number],
         };
@@ -1014,19 +1016,34 @@ export const TransportFlowOverlay = memo(function TransportFlowOverlay() {
             </mesh>
           ))}
 
-          {/* PartSource (Feeder) Portals */}
+          {/* PartSource (Feeder) Portals — Clickable in 3D Viewport to toggle ON/OFF */}
           {spawnerPortals.map((sp) => (
             <group
               key={sp.id}
               position={sp.position}
               quaternion={sp.quaternion}
-              raycast={() => null}
             >
-              <mesh geometry={sharedGeoms.edgeTorus} scale={[1.9, 1.9, 1.9]} raycast={() => null}>
+              <mesh
+                geometry={sharedGeoms.edgeTorus}
+                scale={[1.9, 1.9, 1.9]}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useEditorStore
+                    .getState()
+                    .updateInstanceSpawner(sp.instanceId, { enabled: !sp.enabled });
+                }}
+                onPointerOver={(e) => {
+                  e.stopPropagation();
+                  document.body.style.cursor = 'pointer';
+                }}
+                onPointerOut={() => {
+                  document.body.style.cursor = 'auto';
+                }}
+              >
                 <meshBasicMaterial
-                  color="#10b981"
+                  color={sp.enabled ? '#10b981' : '#64748b'}
                   transparent
-                  opacity={0.75}
+                  opacity={sp.enabled ? 0.8 : 0.36}
                   toneMapped={false}
                 />
               </mesh>

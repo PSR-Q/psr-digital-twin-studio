@@ -13,6 +13,7 @@ import {
 import { runtimeBusClient } from '../engine/runtimeBusClient';
 import {
   collectInstanceAllSignals,
+  makeSpawnerEnableKey,
   synthesizeComponentSignals,
 } from '../engine/signalCatalogSync';
 import {
@@ -383,6 +384,7 @@ export interface EditorStoreState {
     instanceId: UUID,
     patch: Partial<PartSourceRuntimeConfig>
   ) => void;
+  setAllSpawnersEnabled: (enabled: boolean) => void;
   triggerManualSpawnNow: (instanceId: UUID) => void;
   dropWorkpieceByRay: (
     rayOrigin: Vector3Tuple,
@@ -712,6 +714,23 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       }
     }
 
+    // Keep Part Feeder UI ON/OFF switches synchronized when DO_FeedEnable is toggled in Force Console
+    const isSpawnerEnableTag =
+      targetBinding.componentSignalKey.startsWith('FLOW::') &&
+      targetBinding.componentSignalKey.endsWith('::DO_FeedEnable');
+
+    const nextTransportGraph =
+      isSpawnerEnableTag && enabled
+        ? {
+            ...state.scene.transportGraph,
+            spawners: state.scene.transportGraph.spawners.map((sp) =>
+              makeSpawnerEnableKey(sp.id) === targetBinding.componentSignalKey
+                ? { ...sp, enabled: Boolean(effectiveVal) }
+                : sp
+            ),
+          }
+        : state.scene.transportGraph;
+
     const nextBindings = state.scene.plcTagMap.bindings.map((b) =>
       b.id === bindingId
         ? {
@@ -730,7 +749,13 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     runtimeBusClient.syncTagMap(nextTagMap);
 
     let nextRunState = state.runState;
-    if (enabled && autoRun && state.runState === 'STOPPED') {
+    const shouldAutoStart =
+      enabled &&
+      autoRun &&
+      state.runState === 'STOPPED' &&
+      !(isSpawnerEnableTag && effectiveVal === false);
+
+    if (shouldAutoStart) {
       nextRunState = 'RUNNING';
       runtimeBusClient.sendControl(
         'RUNNING',
@@ -743,6 +768,7 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       jogPreview: null,
       scene: {
         ...state.scene,
+        transportGraph: nextTransportGraph,
         plcTagMap: nextTagMap,
       },
     });
@@ -1170,6 +1196,7 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         id: `spawner-${instanceId}`,
         instanceId,
         targetPathNodeId: primaryNode.id,
+        enabled: true,
         mode: 'interval',
         intervalSec: 2.2,
         maxActiveItems: 40,
@@ -1206,7 +1233,7 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       },
       statusMessage:
         role === 'spawner'
-          ? 'Configured machine as Part Feeder (PartSource).'
+          ? 'Configured machine as Part Feeder (Auto Feed ON).'
           : role === 'sink'
             ? 'Configured machine as Exit Despawner (PartSink).'
             : 'Set machine to Pass-Through Transport.',
@@ -1215,9 +1242,31 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
 
   updateInstanceSpawner: (instanceId, patch) => {
     const state = get();
+    const targetSpawner = state.scene.transportGraph.spawners.find(
+      (sp) => sp.instanceId === instanceId
+    );
     const nextSpawners = state.scene.transportGraph.spawners.map((sp) =>
       sp.instanceId === instanceId ? { ...sp, ...patch } : sp
     );
+
+    // Clear any manual override on DO_FeedEnable when toggling enabled via UI switches
+    const enableKey = targetSpawner ? makeSpawnerEnableKey(targetSpawner.id) : null;
+    const cleanedPrevTagMap =
+      patch.enabled !== undefined && enableKey
+        ? {
+            ...state.scene.plcTagMap,
+            bindings: state.scene.plcTagMap.bindings.map((b) =>
+              b.instanceId === instanceId && b.componentSignalKey === enableKey
+                ? {
+                    ...b,
+                    manualForceEnabled: false,
+                    manualForceValue: Boolean(patch.enabled),
+                  }
+                : b
+            ),
+          }
+        : state.scene.plcTagMap;
+
     const synced = syncSceneTransportAndSignals({
       instances: state.scene.instances,
       componentLibrary: state.scene.componentLibrary,
@@ -1226,7 +1275,69 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         ...state.scene.transportGraph,
         spawners: nextSpawners,
       },
-      prevTagMap: state.scene.plcTagMap,
+      prevTagMap: cleanedPrevTagMap,
+    });
+    runtimeBusClient.syncTagMap(synced.plcTagMap);
+
+    const instName =
+      state.scene.instances.find((i) => i.id === instanceId)?.name ?? instanceId;
+
+    set({
+      isDirty: true,
+      scene: {
+        ...state.scene,
+        transportGraph: synced.transportGraph,
+        plcTagMap: synced.plcTagMap,
+      },
+      ...(patch.enabled !== undefined
+        ? {
+            statusMessage: patch.enabled
+              ? `Part Feeder ON (${instName}) — Auto-feeding workpieces onto conveyor.`
+              : `Part Feeder OFF (${instName}) — Auto-feed paused (use Workpieces tab or +1 Feed manually).`,
+          }
+        : {}),
+    });
+  },
+
+  setAllSpawnersEnabled: (enabled) => {
+    const state = get();
+    if (state.scene.transportGraph.spawners.length === 0) {
+      set({
+        statusMessage:
+          'No Part Feeder configured in this scene. Select an infeed conveyor -> Flow tab -> Part Feeder.',
+      });
+      return;
+    }
+
+    const enableKeys = new Set(
+      state.scene.transportGraph.spawners.map((sp) => makeSpawnerEnableKey(sp.id))
+    );
+    const nextSpawners = state.scene.transportGraph.spawners.map((sp) => ({
+      ...sp,
+      enabled,
+    }));
+    const cleanedPrevTagMap = {
+      ...state.scene.plcTagMap,
+      bindings: state.scene.plcTagMap.bindings.map((b) =>
+        enableKeys.has(b.componentSignalKey)
+          ? {
+              ...b,
+              manualForceEnabled: false,
+              manualForceValue: enabled,
+            }
+          : b
+      ),
+    };
+
+    const synced = syncSceneTransportAndSignals({
+      instances: state.scene.instances,
+      componentLibrary: state.scene.componentLibrary,
+      snapConnections: state.scene.snapConnections,
+      prevTransportGraph: {
+        ...state.scene.transportGraph,
+        spawners: nextSpawners,
+      },
+      prevTagMap: cleanedPrevTagMap,
     });
     runtimeBusClient.syncTagMap(synced.plcTagMap);
 
@@ -1237,6 +1348,9 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         transportGraph: synced.transportGraph,
         plcTagMap: synced.plcTagMap,
       },
+      statusMessage: enabled
+        ? `Part Feeder ON (${nextSpawners.length} feeder${nextSpawners.length > 1 ? 's' : ''}) — Auto-feeding workpieces.`
+        : 'Part Feeder OFF — Paused automatic feeding so you can test or drag workpieces onto the belt manually.',
     });
   },
 

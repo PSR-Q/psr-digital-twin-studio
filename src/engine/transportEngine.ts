@@ -1149,9 +1149,14 @@ export class TransportRuntimeEngine {
       }
     }
 
-    // 5. Step Part Spawners (`PartSource` — interval auto-feed + PLC rising-edge trigger)
+    // 5. Step Part Spawners (`PartSource` — ON/OFF gated interval auto-feed + PLC rising-edge trigger)
     for (const spawner of graph.spawners) {
       const maxAllowed = spawner.maxActiveItems ?? 45;
+      const autoFeedEnabled =
+        spawner.enableBoolSlot !== undefined && spawner.enableBoolSlot >= 0
+          ? bufferView.readPlcToSimBool(spawner.enableBoolSlot)
+          : spawner.enabled !== false;
+
       const triggerHigh =
         spawner.triggerBoolSlot !== undefined && spawner.triggerBoolSlot >= 0
           ? bufferView.readPlcToSimBool(spawner.triggerBoolSlot)
@@ -1161,21 +1166,29 @@ export class TransportRuntimeEngine {
       const risingEdge = triggerHigh && !prevTrig;
 
       let shouldAttemptSpawn = risingEdge;
-      if (spawner.mode === 'interval' && this.items.length < maxAllowed) {
+      let timerDue = false;
+      if (!autoFeedEnabled) {
+        // Hold timer reset while Auto Feed is OFF so re-enabling feeds cleanly without burst backlog
+        this.spawnerTimers.delete(spawner.id);
+      } else if (spawner.mode === 'interval' && this.items.length < maxAllowed) {
         const prevTimer = this.spawnerTimers.get(spawner.id);
-        // Spawn first box quickly (0.35s after Play) so user sees immediate motion!
+        // Spawn first box quickly (0.35s after Play / Enable) so user sees immediate motion!
         const elapsed = (prevTimer ?? Math.max(0, spawner.intervalSec - 0.35)) + dt;
         const period = Math.max(0.4, spawner.intervalSec || 2.2);
         if (elapsed >= period) {
           shouldAttemptSpawn = true;
-          this.spawnerTimers.set(spawner.id, 0);
+          timerDue = true;
+          this.spawnerTimers.set(spawner.id, period);
         } else {
           this.spawnerTimers.set(spawner.id, elapsed);
         }
       }
 
       if (shouldAttemptSpawn && this.items.length < maxAllowed) {
-        this.spawnSinglePartNow(graph, spawner.id);
+        const spawned = this.spawnSinglePartNow(graph, spawner.id);
+        if (spawned && timerDue) {
+          this.spawnerTimers.set(spawner.id, 0);
+        }
       }
 
       if (spawner.spawnedCountDintSlot !== undefined && spawner.spawnedCountDintSlot >= 0) {
