@@ -1814,9 +1814,40 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         mergedMap.set(builtin.id, structuredClone(builtin));
       }
       for (const comp of parsed.componentLibrary) {
+        const builtinDef =
+          comp.modelSource.kind === 'builtin'
+            ? BUILTIN_COMPONENT_CATALOG.find((b) => b.id === comp.id)
+            : undefined;
+        const mergedNodeRoles = builtinDef
+          ? { ...structuredClone(builtinDef.nodeRoles), ...structuredClone(comp.nodeRoles) }
+          : structuredClone(comp.nodeRoles);
+
+        // Migrate legacy v0.4.2 default strokes on Stopper Gate (110mm -> 95mm) & OpenUSD Gantry (240mm -> 165mm)
+        if (
+          comp.id === 'builtin-pneumatic-stopper' &&
+          mergedNodeRoles.Piston_Stopper_Blade_Axis?.role === 'LinearAxis' &&
+          mergedNodeRoles.Piston_Stopper_Blade_Axis.maxLimitMm === 110
+        ) {
+          mergedNodeRoles.Piston_Stopper_Blade_Axis.maxLimitMm = 95;
+        }
+        if (
+          comp.id === 'builtin-openusd-cartesian-gantry' &&
+          mergedNodeRoles.Vertical_Z_Mast_Axis?.role === 'LinearAxis' &&
+          mergedNodeRoles.Vertical_Z_Mast_Axis.maxLimitMm === 240
+        ) {
+          mergedNodeRoles.Vertical_Z_Mast_Axis.maxLimitMm = 165;
+        }
+
         mergedMap.set(comp.id, {
           ...comp,
-          exposedSignals: synthesizeComponentSignals(comp.nodeRoles),
+          ...(builtinDef
+            ? {
+                boundingBox: structuredClone(builtinDef.boundingBox),
+                modelSource: structuredClone(builtinDef.modelSource),
+              }
+            : {}),
+          nodeRoles: mergedNodeRoles,
+          exposedSignals: synthesizeComponentSignals(mergedNodeRoles),
         });
       }
       const mergedLibrary = Array.from(mergedMap.values());

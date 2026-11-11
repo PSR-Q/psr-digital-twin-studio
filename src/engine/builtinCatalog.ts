@@ -234,16 +234,16 @@ export const BUILTIN_COMPONENT_CATALOG: ComponentDefinition[] = [
     name: 'Pneumatic Blade Stopper',
     category: 'Actuators',
     description:
-      'Inline pneumatic stopper gate with vertical LinearAxis blade, automatic Reed Switch limits, and status beacon.',
+      'Under-belt pop-up pneumatic stopper gate (0.78m deck) — blade retracts flush below belt and pops up +95mm to block workpieces.',
     modelSource: {
       kind: 'builtin',
       uri: './sample-models/pneumatic-stopper.glb',
       fileName: 'pneumatic-stopper.glb',
     },
     boundingBox: {
-      min: [-0.14, 0, -0.34],
-      max: [0.14, 0.98, 0.34],
-      size: [0.28, 0.98, 0.68],
+      min: [-0.14, 0, -0.31],
+      max: [0.14, 0.86, 0.36],
+      size: [0.28, 0.86, 0.67],
     },
     nodeRoles: {
       Cylinder_Mount_Frame: { role: 'StaticMesh', nodeName: 'Cylinder_Mount_Frame' },
@@ -252,7 +252,7 @@ export const BUILTIN_COMPONENT_CATALOG: ComponentDefinition[] = [
         nodeName: 'Piston_Stopper_Blade_Axis',
         axis: [0, 1, 0],
         minLimitMm: 0,
-        maxLimitMm: 110,
+        maxLimitMm: 95,
         initialPosMm: 0,
         behavior: {
           presetType: 'PneumaticCylinder',
@@ -373,7 +373,7 @@ export const BUILTIN_COMPONENT_CATALOG: ComponentDefinition[] = [
     name: 'Cartesian Pick & Place (OpenUSD)',
     category: 'Actuators',
     description:
-      'AOUSD Z-up metric OpenUSD (.usdz) overhead servo traverse carriage + chained pneumatic Z-mast & vacuum gripper.',
+      'Compact conveyor-integrated OpenUSD (.usdz) portal with pass-through belt bed, servo traverse carriage & belt-level Z-mast.',
     modelSource: {
       kind: 'builtin',
       uri: './sample-models/cartesian-gantry-cell.usdz',
@@ -381,15 +381,18 @@ export const BUILTIN_COMPONENT_CATALOG: ComponentDefinition[] = [
       format: 'usdz',
     },
     boundingBox: {
-      min: [-0.5, 0, -0.485],
-      max: [0.5, 1.63, 0.485],
-      size: [1.0, 1.63, 0.97],
+      min: [-0.5, 0, -0.38],
+      max: [0.5, 1.34, 0.38],
+      size: [1.0, 1.34, 0.76],
     },
     nodeRoles: {
       Portal_Leg_FL: { role: 'StaticMesh', nodeName: 'Portal_Leg_FL' },
       Portal_Leg_FR: { role: 'StaticMesh', nodeName: 'Portal_Leg_FR' },
       Portal_Leg_BL: { role: 'StaticMesh', nodeName: 'Portal_Leg_BL' },
       Portal_Leg_BR: { role: 'StaticMesh', nodeName: 'Portal_Leg_BR' },
+      Pass_Rail_Front: { role: 'StaticMesh', nodeName: 'Pass_Rail_Front' },
+      Pass_Rail_Back: { role: 'StaticMesh', nodeName: 'Pass_Rail_Back' },
+      Pass_Conveyor_Bed: { role: 'StaticMesh', nodeName: 'Pass_Conveyor_Bed' },
       Side_Header_Front: { role: 'StaticMesh', nodeName: 'Side_Header_Front' },
       Side_Header_Back: { role: 'StaticMesh', nodeName: 'Side_Header_Back' },
       Overhead_Bridge_Beam: { role: 'StaticMesh', nodeName: 'Overhead_Bridge_Beam' },
@@ -397,8 +400,8 @@ export const BUILTIN_COMPONENT_CATALOG: ComponentDefinition[] = [
         role: 'LinearAxis',
         nodeName: 'Servo_Traverse_Carriage_Axis',
         axis: [0, 0, 1],
-        minLimitMm: -280,
-        maxLimitMm: 280,
+        minLimitMm: -220,
+        maxLimitMm: 220,
         initialPosMm: 0,
         behavior: {
           presetType: 'ServoPositioning',
@@ -413,7 +416,7 @@ export const BUILTIN_COMPONENT_CATALOG: ComponentDefinition[] = [
         nodeName: 'Vertical_Z_Mast_Axis',
         axis: [0, -1, 0],
         minLimitMm: 0,
-        maxLimitMm: 220,
+        maxLimitMm: 165,
         initialPosMm: 0,
         parentNodeName: 'Servo_Traverse_Carriage_Axis',
         behavior: {

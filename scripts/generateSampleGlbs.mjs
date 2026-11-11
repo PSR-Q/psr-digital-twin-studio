@@ -377,18 +377,30 @@ function buildConveyorGlb(lengthM, rootName) {
 function buildPneumaticStopperGlb() {
   const beltHeightM = 0.78;
   const housingGeom = mergeGeometries([
-    // Mounting bridge straddling conveyor or bolting beside belt
-    createBoxGeometry(0.28, 0.74, 0.14, [0, 0.37, 0]),
-    createBoxGeometry(0.22, 0.18, 0.68, [0, beltHeightM - 0.12, 0]),
+    // Matching conveyor side rails (flush with 0.62m wide belt conveyors)
+    createBoxGeometry(0.28, 0.12, 0.05, [0, beltHeightM - 0.05, 0.285]),
+    createBoxGeometry(0.28, 0.12, 0.05, [0, beltHeightM - 0.05, -0.285]),
+    // Split pass-through slider/roller bed at 0.78m leaving a 50mm center slot for the pop-up blade
+    createBoxGeometry(0.105, 0.035, 0.51, [-0.0825, beltHeightM, 0]),
+    createBoxGeometry(0.105, 0.035, 0.51, [0.0825, beltHeightM, 0]),
+    // Twin support legs to factory floor + lower cross-tie
+    createBoxGeometry(0.06, beltHeightM - 0.08, 0.06, [0, (beltHeightM - 0.08) / 2, 0.26]),
+    createBoxGeometry(0.06, beltHeightM - 0.08, 0.06, [0, (beltHeightM - 0.08) / 2, -0.26]),
+    createBoxGeometry(0.05, 0.045, 0.48, [0, 0.22, 0]),
+    // Under-belt pneumatic cylinder barrel & mounting yoke (tucked cleanly beneath belt!)
+    createBoxGeometry(0.16, 0.05, 0.56, [0, 0.65, 0]),
+    createCylinderYGeometry(0.052, 0.22, 20, [0, 0.53, 0]),
+    // Compact side rail bracket for Reed Switch status lamp
+    createBoxGeometry(0.08, 0.03, 0.07, [0, 0.775, 0.325]),
   ]);
 
-  // LinearAxis target sub-mesh (moves +Y to block workpieces on conveyor)
+  // Under-belt Pop-Up Stopper Blade (LinearAxis +Y: 0mm = tucked flush at Y=0.7925m below 0.7975m belt; +95mm = pops up to Y=0.8875m blocking all parts from belt level!)
   const pistonBladeGeom = mergeGeometries([
-    createCylinderYGeometry(0.028, 0.24, 18, [0, -0.06, 0]),
-    createBoxGeometry(0.035, 0.14, 0.44, [0, 0.08, 0]),
+    createCylinderYGeometry(0.024, 0.22, 18, [0, -0.15, 0]),
+    createBoxGeometry(0.032, 0.115, 0.46, [0, 0, 0]),
   ]);
 
-  const sensorBeaconGeom = createCylinderYGeometry(0.032, 0.12, 16, [0, 0, 0]);
+  const sensorBeaconGeom = createCylinderYGeometry(0.024, 0.065, 16, [0, 0, 0]);
 
   return packGlb({
     rootName: 'Pneumatic_Blade_Stopper',
@@ -396,14 +408,14 @@ function buildPneumaticStopperGlb() {
       {
         name: 'Cylinder_Mount_Frame',
         geometry: housingGeom,
-        color: [0.25, 0.29, 0.34, 1.0],
-        metallic: 0.6,
-        roughness: 0.36,
+        color: [0.22, 0.26, 0.31, 1.0],
+        metallic: 0.65,
+        roughness: 0.38,
       },
       {
         name: 'Piston_Stopper_Blade_Axis',
         geometry: pistonBladeGeom,
-        translation: [0, beltHeightM - 0.02, 0],
+        translation: [0, 0.735, 0],
         color: [0.92, 0.58, 0.12, 1.0],
         metallic: 0.5,
         roughness: 0.3,
@@ -411,7 +423,7 @@ function buildPneumaticStopperGlb() {
       {
         name: 'Reed_Switch_Status_Lamp',
         geometry: sensorBeaconGeom,
-        translation: [0, beltHeightM + 0.18, 0.3],
+        translation: [0, 0.822, 0.325],
         color: [0.12, 0.78, 0.48, 1.0],
         metallic: 0.2,
         roughness: 0.25,
@@ -519,7 +531,7 @@ async function buildCartesianGantryUsdz() {
   const usdaStage = `#usda 1.0
 (
     defaultPrim = "CartesianGantryCell"
-    doc = "PSR Digital Twin Studio — Sample OpenUSD (Z-Up, Metric) Industrial Pick & Place Portal"
+    doc = "PSR Digital Twin Studio — Sample OpenUSD (Z-Up, Metric) Conveyor-Integrated Pick & Place Portal"
     metersPerUnit = 1
     upAxis = "Z"
 )
@@ -534,9 +546,21 @@ def Xform "CartesianGantryCell"
             def Shader "Shader"
             {
                 uniform token info:id = "UsdPreviewSurface"
-                color3f inputs:diffuseColor = (0.19, 0.24, 0.31)
-                float inputs:metallic = 0.68
-                float inputs:roughness = 0.36
+                color3f inputs:diffuseColor = (0.21, 0.25, 0.31)
+                float inputs:metallic = 0.65
+                float inputs:roughness = 0.38
+                token outputs:surface
+            }
+        }
+        def Material "PassBeltMat"
+        {
+            token outputs:surface.connect = </CartesianGantryCell/Materials/PassBeltMat/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.11, 0.14, 0.17)
+                float inputs:metallic = 0.15
+                float inputs:roughness = 0.76
                 token outputs:surface
             }
         }
@@ -574,8 +598,8 @@ def Xform "CartesianGantryCell"
         {
             rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
             double size = 1.0
-            double3 xformOp:translate = (-0.46, -0.44, 0.74)
-            double3 xformOp:scale = (0.08, 0.08, 1.48)
+            double3 xformOp:translate = (-0.46, -0.34, 0.61)
+            double3 xformOp:scale = (0.07, 0.07, 1.22)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         }
         def Cube "Portal_Leg_FR" (
@@ -584,8 +608,8 @@ def Xform "CartesianGantryCell"
         {
             rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
             double size = 1.0
-            double3 xformOp:translate = (0.46, -0.44, 0.74)
-            double3 xformOp:scale = (0.08, 0.08, 1.48)
+            double3 xformOp:translate = (0.46, -0.34, 0.61)
+            double3 xformOp:scale = (0.07, 0.07, 1.22)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         }
         def Cube "Portal_Leg_BL" (
@@ -594,8 +618,8 @@ def Xform "CartesianGantryCell"
         {
             rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
             double size = 1.0
-            double3 xformOp:translate = (-0.46, 0.44, 0.74)
-            double3 xformOp:scale = (0.08, 0.08, 1.48)
+            double3 xformOp:translate = (-0.46, 0.34, 0.61)
+            double3 xformOp:scale = (0.07, 0.07, 1.22)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         }
         def Cube "Portal_Leg_BR" (
@@ -604,8 +628,38 @@ def Xform "CartesianGantryCell"
         {
             rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
             double size = 1.0
-            double3 xformOp:translate = (0.46, 0.44, 0.74)
-            double3 xformOp:scale = (0.08, 0.08, 1.48)
+            double3 xformOp:translate = (0.46, 0.34, 0.61)
+            double3 xformOp:scale = (0.07, 0.07, 1.22)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+        def Cube "Pass_Rail_Front" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
+            double size = 1.0
+            double3 xformOp:translate = (0, -0.285, 0.73)
+            double3 xformOp:scale = (1.0, 0.05, 0.12)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+        def Cube "Pass_Rail_Back" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
+            double size = 1.0
+            double3 xformOp:translate = (0, 0.285, 0.73)
+            double3 xformOp:scale = (1.0, 0.05, 0.12)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+        def Cube "Pass_Conveyor_Bed" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </CartesianGantryCell/Materials/PassBeltMat>
+            double size = 1.0
+            double3 xformOp:translate = (0, 0, 0.78)
+            double3 xformOp:scale = (0.98, 0.51, 0.035)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         }
         def Cube "Side_Header_Front" (
@@ -614,8 +668,8 @@ def Xform "CartesianGantryCell"
         {
             rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
             double size = 1.0
-            double3 xformOp:translate = (0, -0.44, 1.49)
-            double3 xformOp:scale = (1.0, 0.09, 0.08)
+            double3 xformOp:translate = (0, -0.34, 1.23)
+            double3 xformOp:scale = (1.0, 0.08, 0.07)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         }
         def Cube "Side_Header_Back" (
@@ -624,8 +678,8 @@ def Xform "CartesianGantryCell"
         {
             rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
             double size = 1.0
-            double3 xformOp:translate = (0, 0.44, 1.49)
-            double3 xformOp:scale = (1.0, 0.09, 0.08)
+            double3 xformOp:translate = (0, 0.34, 1.23)
+            double3 xformOp:scale = (1.0, 0.08, 0.07)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         }
         def Cube "Overhead_Bridge_Beam" (
@@ -634,8 +688,8 @@ def Xform "CartesianGantryCell"
         {
             rel material:binding = </CartesianGantryCell/Materials/PortalSteelMat>
             double size = 1.0
-            double3 xformOp:translate = (0, 0, 1.52)
-            double3 xformOp:scale = (0.22, 0.96, 0.10)
+            double3 xformOp:translate = (0, 0, 1.26)
+            double3 xformOp:scale = (0.20, 0.76, 0.08)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         }
     }
@@ -646,8 +700,8 @@ def Xform "CartesianGantryCell"
     {
         rel material:binding = </CartesianGantryCell/Materials/ServoCarriageCyanMat>
         double size = 1.0
-        double3 xformOp:translate = (0, 0, 1.41)
-        double3 xformOp:scale = (0.28, 0.26, 0.15)
+        double3 xformOp:translate = (0, 0, 1.18)
+        double3 xformOp:scale = (0.24, 0.22, 0.10)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
     }
 
@@ -657,9 +711,9 @@ def Xform "CartesianGantryCell"
     {
         rel material:binding = </CartesianGantryCell/Materials/ServoCarriageCyanMat>
         uniform token axis = "Z"
-        double height = 0.38
-        double radius = 0.045
-        double3 xformOp:translate = (0, 0, 1.18)
+        double height = 0.22
+        double radius = 0.036
+        double3 xformOp:translate = (0, 0, 1.08)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         def Cube "Vacuum_Gripper_Tool_Axis" (
@@ -668,8 +722,8 @@ def Xform "CartesianGantryCell"
         {
             rel material:binding = </CartesianGantryCell/Materials/GripperAmberMat>
             double size = 1.0
-            double3 xformOp:translate = (0, 0, -0.21)
-            double3 xformOp:scale = (0.24, 0.20, 0.05)
+            double3 xformOp:translate = (0, 0, -0.095)
+            double3 xformOp:scale = (0.22, 0.18, 0.04)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         }
     }
@@ -680,9 +734,9 @@ def Xform "CartesianGantryCell"
     {
         rel material:binding = </CartesianGantryCell/Materials/GripperAmberMat>
         uniform token axis = "Z"
-        double height = 0.10
-        double radius = 0.036
-        double3 xformOp:translate = (0.46, -0.44, 1.58)
+        double height = 0.075
+        double radius = 0.028
+        double3 xformOp:translate = (0.46, -0.34, 1.30)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 }

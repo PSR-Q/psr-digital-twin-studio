@@ -52,13 +52,13 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.4.2-sketchup-floor
-          name: "v0.4.2 — SketchUp White / Sky / Dark Viewport Floor Theme Settings + Workpieces (.exe)"
+          tag_name: v0.4.3-stopper-gate
+          name: "v0.4.3 — Calibrated Under-Belt Pop-Up Stopper Gate & Conveyor-Flush OpenUSD Portal (.exe)"
           body: |
-            ### v0.4.2 Deliverable — Standalone Windows `.exe` (`VC-Digital-Twin-Studio-0.4.2-Portable.exe`)
-            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.4.2-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
-            - **New in `v0.4.2` — SketchUp White Floor & Configurable 3D Viewport Theme Settings:**
-              - **5 Built-in 3D Viewport & Floor Presets:** **SketchUp White (พื้นขาวคลีน)**, **SketchUp Sky & Ground (ท้องฟ้า + พื้นขาว)**, **CAD Light Gray (พื้นเทาสว่าง)**, **Dark Industrial (พื้นมืดเดิม)**, plus **Custom Sky & Floor Color Pickers**.
-              - **SketchUp-Style Extended RGB Origin Axes & Zero-Flicker Floor Grid:** Solid positive `+X` (Red), `+Y` (Green Up), `+Z` (Blue) & dashed negative rays with toggleable Metric Grid in both Top Toolbar (`Floor: White`) and Right Inspector (`VIEWPORT & FLOOR THEME`).
-            - **Includes `v0.4.1` Workpiece Catalog & Direct 3D Belt Drag-and-Drop + Full Milestones 1–4 Suite** (glTF/OpenUSD Importer, Component Axis Builder & Force I/O, Spline Accumulation & HSC Encoders, and Live `UtilityProcess` PLC Drivers for Siemens S7, Mitsubishi MELSEC 3E, and OPC UA).
+            ### v0.4.3 Deliverable — Standalone Windows `.exe` (`VC-Digital-Twin-Studio-0.4.3-Portable.exe`)
+            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.4.3-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
+            - **New in `v0.4.3` — Calibrated Conveyor-Level Stopper Gate & OpenUSD Portal Geometry:**
+              - **Under-Belt Pop-Up `Pneumatic Blade Stopper` (`0.78m` Pass-Through Deck):** Cylinder barrel tucked cleanly underneath the conveyor; retracted (`0 mm`) stopper blade sits `5 mm` below the `0.80m` belt surface so workpieces glide smoothly across, and extended (`+95 mm`) pops up to `0.888m` with zero under-blade gap.
+              - **Lowered Conveyor-Integrated `Cartesian Pick & Place (OpenUSD)`:** Portal height lowered from `1.63m` to `1.30m` with a built-in `0.78m` `Pass_Conveyor_Bed` & side rails (eliminating floating mid-air gaps when docked between conveyors) and calibrated `165 mm` vertical mast stroke down to the `0.80m` belt surface.
+            - **Includes `v0.4.2` SketchUp White / Sky / Dark Viewport Themes, `v0.4.1` Workpiece Catalog & Belt Drag-and-Drop, and Full Milestones 1–4 Suite.**
           files: release/*.exe
