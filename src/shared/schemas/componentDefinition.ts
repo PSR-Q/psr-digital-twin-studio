@@ -80,25 +80,31 @@ export interface StaticMeshRole {
 export interface LinearAxisRole {
   role: 'LinearAxis';
   nodeName: string;
-  /** Local normalized direction vector [x, y, z] */
+  /** Normalized direction vector [x, y, z] in Component Space (+X flow, +Y up, +Z front) */
   axis: Vector3Tuple;
   /** Minimum travel in millimeters */
   minLimitMm: number;
   /** Maximum travel in millimeters */
   maxLimitMm: number;
   initialPosMm: number;
+  /** Optional kinematic parent sub-mesh node name so sibling CAD parts move together */
+  parentNodeName?: string;
   behavior?: PneumaticCylinderPreset | ServoPositioningPreset;
 }
 
 export interface RotaryAxisRole {
   role: 'RotaryAxis';
   nodeName: string;
-  /** Local normalized rotation axis [x, y, z] */
+  /** Normalized rotation axis [x, y, z] in Component Space */
   axis: Vector3Tuple;
   mode: 'bounded' | 'continuous';
   minDeg: number;
   maxDeg: number;
   defaultRpm: number;
+  /** Optional pivot offset [dx, dy, dz] (meters) from sub-mesh bounding-box center */
+  pivotOffset?: Vector3Tuple;
+  /** Optional kinematic parent sub-mesh node name so sibling CAD parts move together */
+  parentNodeName?: string;
   behavior?: ConveyorDrivePreset | ServoPositioningPreset;
 }
 
@@ -175,7 +181,11 @@ export interface ComponentSignalDescriptor {
   label: string;
   direction: 'PLC_TO_SIM' | 'SIM_TO_PLC';
   dataType: 'BOOL' | 'INT16' | 'DINT32' | 'FLOAT32';
+  nodeName?: string;
   unit?: string;
+  minVal?: number;
+  maxVal?: number;
+  defaultVal?: number;
   description?: string;
 }
 

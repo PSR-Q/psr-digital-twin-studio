@@ -1,7 +1,12 @@
 import { create } from 'zustand';
 import { BUILTIN_COMPONENT_CATALOG } from '../engine/builtinCatalog';
 import { buildComponentDefinitionFromGlbBuffer } from '../engine/glbAssetRegistry';
+import type { JogPreviewState } from '../engine/kinematicsEngine';
 import { runtimeBusClient } from '../engine/runtimeBusClient';
+import {
+  synthesizeComponentSignals,
+  syncPlcTagMapWithScene,
+} from '../engine/signalCatalogSync';
 import {
   recomputeSceneSnapConnections,
   solveMagneticSnap,
@@ -16,12 +21,26 @@ import {
   type SceneSchema,
   type SimulationRunState,
   type SnapPortDefinition,
+  type SubMeshRoleAssignment,
   type TransformData,
   type UUID,
   type Vector3Tuple,
 } from '../shared/schemas';
 
 export type GizmoTransformMode = 'translate' | 'rotate' | 'scale';
+export type InspectorTabMode = 'transform' | 'builder' | 'signals';
+
+function pickDefaultSubMesh(comp: ComponentDefinition | undefined): string | null {
+  if (!comp) return null;
+  const roles = Object.values(comp.nodeRoles);
+  const activeAxis = roles.find(
+    (r) => r.role === 'LinearAxis' || r.role === 'RotaryAxis'
+  );
+  if (activeAxis) return activeAxis.nodeName;
+  const activeVfx = roles.find((r) => r.role === 'VisualEffect');
+  if (activeVfx) return activeVfx.nodeName;
+  return roles[0]?.nodeName ?? null;
+}
 
 function buildStarterDemoScene(): SceneSchema {
   const base = createEmptySceneSchema(structuredClone(BUILTIN_COMPONENT_CATALOG));
@@ -98,12 +117,20 @@ function buildStarterDemoScene(): SceneSchema {
   const catalogMap = new Map(base.componentLibrary.map((c) => [c.id, c]));
   base.instances = instances;
   base.snapConnections = recomputeSceneSnapConnections(instances, catalogMap);
+  base.plcTagMap = syncPlcTagMapWithScene(
+    instances,
+    base.componentLibrary,
+    base.plcTagMap
+  );
   return base;
 }
 
 export interface EditorStoreState {
   scene: SceneSchema;
   selectedInstanceId: UUID | null;
+  selectedSubMeshName: string | null;
+  inspectorTab: InspectorTabMode;
+  jogPreview: JogPreviewState | null;
   gizmoMode: GizmoTransformMode;
   isGizmoDragging: boolean;
   activeSnapPreview: SnapSolveResult | null;
@@ -111,8 +138,11 @@ export interface EditorStoreState {
   isDirty: boolean;
   statusMessage: string;
 
-  // Selection & Gizmo
+  // Selection, Sub-Mesh Picking & Gizmo
   selectInstance: (id: UUID | null) => void;
+  selectSubMesh: (nodeName: string | null) => void;
+  setInspectorTab: (tab: InspectorTabMode) => void;
+  setJogPreview: (preview: JogPreviewState | null) => void;
   setGizmoMode: (mode: GizmoTransformMode) => void;
   setGizmoDragging: (dragging: boolean) => void;
   setActiveSnapPreview: (snap: SnapSolveResult | null) => void;
@@ -121,6 +151,20 @@ export interface EditorStoreState {
   // Simulation controls
   setRunState: (state: SimulationRunState) => void;
   setSimSpeedMultiplier: (speed: number) => void;
+
+  // Milestone 2: Component Builder & Signal Force Panel
+  setSubMeshRole: (
+    componentId: UUID,
+    nodeName: string,
+    assignment: SubMeshRoleAssignment
+  ) => void;
+  setSignalForce: (
+    bindingId: UUID,
+    enabled: boolean,
+    value: boolean | number,
+    autoRun?: boolean
+  ) => void;
+  clearAllForces: () => void;
 
   // Environment settings
   updateEnvironment: (patch: Partial<SceneEnvironmentConfig>) => void;
@@ -168,18 +212,69 @@ function getCatalogMap(library: ComponentDefinition[]): Map<UUID, ComponentDefin
   return new Map(library.map((c) => [c.id, c]));
 }
 
+const initialDemoScene = buildStarterDemoScene();
+runtimeBusClient.syncTagMap(initialDemoScene.plcTagMap);
+
 export const useEditorStore = create<EditorStoreState>((set, get) => ({
-  scene: buildStarterDemoScene(),
-  selectedInstanceId: 'inst-conv-02',
+  scene: initialDemoScene,
+  selectedInstanceId: 'inst-stopper-01',
+  selectedSubMeshName: null,
+  inspectorTab: 'transform',
+  jogPreview: null,
   gizmoMode: 'translate',
   isGizmoDragging: false,
   activeSnapPreview: null,
   runState: 'STOPPED',
   isDirty: false,
   statusMessage:
-    'Ready — Drag Buffer_Conveyor_02 with Gizmo arrows toward Stopper_Gate_01 to test magnetic SnapPorts, or drop any .glb file.',
+    'Milestone 2 Ready — Configure Linear/Rotary joints in "Builder" or click "Force I/O" to test actuators & Reed Switches live.',
 
-  selectInstance: (id) => set({ selectedInstanceId: id }),
+  selectInstance: (id) =>
+    set((state) => {
+      if (state.selectedInstanceId === id) return state;
+      let nextSubMesh: string | null = null;
+      if (id && state.inspectorTab === 'builder') {
+        const inst = state.scene.instances.find((i) => i.id === id);
+        const comp = inst
+          ? state.scene.componentLibrary.find((c) => c.id === inst.componentId)
+          : undefined;
+        nextSubMesh = pickDefaultSubMesh(comp);
+      }
+      return {
+        selectedInstanceId: id,
+        selectedSubMeshName: nextSubMesh,
+        jogPreview: null,
+      };
+    }),
+
+  selectSubMesh: (selectedSubMeshName) =>
+    set({
+      selectedSubMeshName,
+      jogPreview: null,
+    }),
+
+  setInspectorTab: (inspectorTab) =>
+    set((state) => {
+      let nextSubMesh = state.selectedSubMeshName;
+      if (inspectorTab === 'builder' && !nextSubMesh && state.selectedInstanceId) {
+        const inst = state.scene.instances.find(
+          (i) => i.id === state.selectedInstanceId
+        );
+        const comp = inst
+          ? state.scene.componentLibrary.find((c) => c.id === inst.componentId)
+          : undefined;
+        nextSubMesh = pickDefaultSubMesh(comp);
+      } else if (inspectorTab !== 'builder') {
+        nextSubMesh = null;
+      }
+      return {
+        inspectorTab,
+        selectedSubMeshName: nextSubMesh,
+        jogPreview: null,
+      };
+    }),
+
+  setJogPreview: (jogPreview) => set({ jogPreview }),
 
   setGizmoMode: (gizmoMode) => set({ gizmoMode }),
 
@@ -198,12 +293,13 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     runtimeBusClient.sendControl(runState, mult);
     set({
       runState,
+      jogPreview: null,
       statusMessage:
         runState === 'RUNNING'
-          ? `Simulation RUNNING (${mult.toFixed(1)}x speed — Cyclic I/O Bus Active)`
+          ? `Simulation RUNNING (${mult.toFixed(1)}x speed — Cyclic I/O & Forward Kinematics Active)`
           : runState === 'PAUSED'
             ? 'Simulation PAUSED'
-            : 'Simulation STOPPED & Reset',
+            : 'Simulation STOPPED & Reset to Home',
     });
   },
 
@@ -219,6 +315,139 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         },
       },
     }));
+  },
+
+  setSubMeshRole: (componentId, nodeName, assignment) => {
+    const state = get();
+    const nextLibrary = state.scene.componentLibrary.map((comp) => {
+      if (comp.id !== componentId) return comp;
+      const nextNodeRoles: Record<string, SubMeshRoleAssignment> = {
+        ...comp.nodeRoles,
+        [nodeName]: assignment,
+      };
+      return {
+        ...comp,
+        nodeRoles: nextNodeRoles,
+        exposedSignals: synthesizeComponentSignals(nextNodeRoles),
+      };
+    });
+
+    const nextTagMap = syncPlcTagMapWithScene(
+      state.scene.instances,
+      nextLibrary,
+      state.scene.plcTagMap
+    );
+    runtimeBusClient.syncTagMap(nextTagMap);
+
+    set({
+      isDirty: true,
+      selectedSubMeshName: nodeName,
+      jogPreview: null,
+      scene: {
+        ...state.scene,
+        componentLibrary: nextLibrary,
+        plcTagMap: nextTagMap,
+      },
+      statusMessage: `Updated "${nodeName}" role -> ${assignment.role} (${nextTagMap.bindings.length} scene I/O tags synced).`,
+    });
+  },
+
+  setSignalForce: (bindingId, enabled, value, autoRun = true) => {
+    const state = get();
+    const targetBinding = state.scene.plcTagMap.bindings.find(
+      (b) => b.id === bindingId
+    );
+    if (!targetBinding) return;
+
+    // Resolve resting defaultVal when unforcing an analog/BOOL tag
+    let effectiveVal: boolean | number = value;
+    if (!enabled) {
+      if (targetBinding.dataType === 'BOOL') {
+        effectiveVal = false;
+      } else {
+        const inst = state.scene.instances.find(
+          (i) => i.id === targetBinding.instanceId
+        );
+        const comp = inst
+          ? state.scene.componentLibrary.find((c) => c.id === inst.componentId)
+          : undefined;
+        const sigDesc = comp?.exposedSignals.find(
+          (s) => s.key === targetBinding.componentSignalKey
+        );
+        effectiveVal = sigDesc?.defaultVal ?? 0;
+      }
+    }
+
+    const nextBindings = state.scene.plcTagMap.bindings.map((b) =>
+      b.id === bindingId
+        ? {
+            ...b,
+            manualForceEnabled: enabled,
+            manualForceValue: effectiveVal,
+          }
+        : b
+    );
+
+    const nextTagMap = {
+      ...state.scene.plcTagMap,
+      bindings: nextBindings,
+    };
+
+    runtimeBusClient.syncTagMap(nextTagMap);
+
+    let nextRunState = state.runState;
+    if (enabled && autoRun && state.runState === 'STOPPED') {
+      nextRunState = 'RUNNING';
+      runtimeBusClient.sendControl(
+        'RUNNING',
+        state.scene.environment.simSpeedMultiplier
+      );
+    }
+
+    set({
+      runState: nextRunState,
+      jogPreview: null,
+      scene: {
+        ...state.scene,
+        plcTagMap: nextTagMap,
+      },
+    });
+  },
+
+  clearAllForces: () => {
+    const state = get();
+    const compMap = getCatalogMap(state.scene.componentLibrary);
+    const instMap = new Map(state.scene.instances.map((i) => [i.id, i]));
+
+    const nextBindings = state.scene.plcTagMap.bindings.map((b) => {
+      if (!b.manualForceEnabled && b.dataType === 'BOOL') return b;
+      const inst = instMap.get(b.instanceId);
+      const comp = inst ? compMap.get(inst.componentId) : undefined;
+      const sigDesc = comp?.exposedSignals.find(
+        (s) => s.key === b.componentSignalKey
+      );
+      const resetVal: boolean | number =
+        b.dataType === 'BOOL' ? false : (sigDesc?.defaultVal ?? 0);
+      return {
+        ...b,
+        manualForceEnabled: false,
+        manualForceValue: resetVal,
+      };
+    });
+
+    const nextTagMap = {
+      ...state.scene.plcTagMap,
+      bindings: nextBindings,
+    };
+    runtimeBusClient.syncTagMap(nextTagMap);
+
+    set({
+      scene: {
+        ...state.scene,
+        plcTagMap: nextTagMap,
+      },
+      statusMessage: 'Cleared all manual Forced I/O overrides.',
+    });
   },
 
   updateEnvironment: (patch) =>
@@ -247,26 +476,36 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     })),
 
   newEmptyScene: () => {
+    const empty = createEmptySceneSchema(structuredClone(BUILTIN_COMPONENT_CATALOG));
     runtimeBusClient.sendControl('STOPPED', 1.0);
+    runtimeBusClient.syncTagMap(empty.plcTagMap);
     set({
-      scene: createEmptySceneSchema(structuredClone(BUILTIN_COMPONENT_CATALOG)),
+      scene: empty,
       selectedInstanceId: null,
+      selectedSubMeshName: null,
+      jogPreview: null,
       activeSnapPreview: null,
       runState: 'STOPPED',
       isDirty: false,
-      statusMessage: 'Created new empty factory layout. Drag a .glb or click an asset from the Catalog.',
+      statusMessage:
+        'Created new empty factory layout. Drag a .glb / OpenUSD file or click an asset from the Catalog.',
     });
   },
 
   loadStarterDemoScene: () => {
+    const demo = buildStarterDemoScene();
     runtimeBusClient.sendControl('STOPPED', 1.0);
+    runtimeBusClient.syncTagMap(demo.plcTagMap);
     set({
-      scene: buildStarterDemoScene(),
-      selectedInstanceId: 'inst-conv-02',
+      scene: demo,
+      selectedInstanceId: 'inst-stopper-01',
+      selectedSubMeshName: null,
+      jogPreview: null,
       activeSnapPreview: null,
       runState: 'STOPPED',
       isDirty: false,
-      statusMessage: 'Loaded Packaging & Mixing Line Demo layout.',
+      statusMessage:
+        'Loaded Packaging & Mixing Line Demo layout with pre-mapped I/O signals.',
     });
   },
 
@@ -280,34 +519,54 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         return false;
       }
 
-      // Ensure built-in catalog items remain available alongside custom imported .glb definitions
+      // Ensure built-in catalog items remain available and legacy M1 components synthesize M2 signals
       const mergedMap = new Map<UUID, ComponentDefinition>();
       for (const builtin of BUILTIN_COMPONENT_CATALOG) {
         mergedMap.set(builtin.id, structuredClone(builtin));
       }
       for (const comp of parsed.componentLibrary) {
-        mergedMap.set(comp.id, comp);
+        const hasModernNodeKeys = comp.exposedSignals.some((s) =>
+          s.key.includes('::')
+        );
+        const upgradedComp: ComponentDefinition = hasModernNodeKeys
+          ? comp
+          : {
+              ...comp,
+              exposedSignals: synthesizeComponentSignals(comp.nodeRoles),
+            };
+        mergedMap.set(upgradedComp.id, upgradedComp);
       }
       const mergedLibrary = Array.from(mergedMap.values());
       const snapConnections = recomputeSceneSnapConnections(
         parsed.instances,
         mergedMap
       );
+      const syncedTagMap = syncPlcTagMapWithScene(
+        parsed.instances,
+        mergedLibrary,
+        parsed.plcTagMap
+      );
 
-      runtimeBusClient.sendControl('STOPPED', parsed.environment.simSpeedMultiplier ?? 1.0);
-      runtimeBusClient.syncTagMap(parsed.plcTagMap);
+      runtimeBusClient.sendControl(
+        'STOPPED',
+        parsed.environment.simSpeedMultiplier ?? 1.0
+      );
+      runtimeBusClient.syncTagMap(syncedTagMap);
 
       set({
         scene: {
           ...parsed,
           componentLibrary: mergedLibrary,
           snapConnections,
+          plcTagMap: syncedTagMap,
         },
         selectedInstanceId: parsed.instances[0]?.id ?? null,
+        selectedSubMeshName: null,
+        jogPreview: null,
         activeSnapPreview: null,
         runState: 'STOPPED',
         isDirty: false,
-        statusMessage: `Loaded "${parsed.metadata.name}" from ${sourceLabel} (${parsed.instances.length} machines, ${snapConnections.length} snapped links).`,
+        statusMessage: `Loaded "${parsed.metadata.name}" from ${sourceLabel} (${parsed.instances.length} machines, ${syncedTagMap.bindings.length} I/O signals).`,
       });
       return true;
     } catch (err) {
@@ -327,10 +586,11 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       },
     };
     const jsonPayload = JSON.stringify(updatedScene, null, 2);
-    const safeFileSlug = updatedScene.metadata.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '') || 'factory-layout';
+    const safeFileSlug =
+      updatedScene.metadata.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || 'factory-layout';
     const suggestedName = `${safeFileSlug}.vcscene.json`;
 
     if (typeof window !== 'undefined' && window.electronAPI) {
@@ -345,7 +605,6 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       return;
     }
 
-    // Browser Live Preview download fallback
     const blob = new Blob([jsonPayload], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
@@ -371,7 +630,6 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       return;
     }
 
-    // Browser Live Preview file input fallback
     await new Promise<void>((resolve) => {
       const input = document.createElement('input');
       input.type = 'file';
@@ -396,11 +654,12 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
 
     const countOfType =
       state.scene.instances.filter((i) => i.componentId === componentId).length + 1;
-    const baseSlug = component.name.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+    const baseSlug = component.name
+      .replace(/[^a-zA-Z0-9]+/g, '_')
+      .replace(/^_|_$/g, '');
     const instanceName = `${baseSlug}_${String(countOfType).padStart(2, '0')}`;
     const newId = `inst-${crypto.randomUUID().slice(0, 8)}`;
 
-    // Default spawn position staggered near center if clicked instead of dragged
     const fallbackOffset = (state.scene.instances.length % 5) * 0.65 - 1.2;
     const initialPos: Vector3Tuple = worldDropPos
       ? [
@@ -445,14 +704,24 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
 
     const nextInstances = [...state.scene.instances, newInstance];
     const nextConnections = recomputeSceneSnapConnections(nextInstances, catalogMap);
+    const nextTagMap = syncPlcTagMapWithScene(
+      nextInstances,
+      state.scene.componentLibrary,
+      state.scene.plcTagMap
+    );
+    runtimeBusClient.syncTagMap(nextTagMap);
 
     set({
       isDirty: true,
       selectedInstanceId: newId,
+      selectedSubMeshName:
+        state.inspectorTab === 'builder' ? pickDefaultSubMesh(component) : null,
+      jogPreview: null,
       scene: {
         ...state.scene,
         instances: nextInstances,
         snapConnections: nextConnections,
+        plcTagMap: nextTagMap,
       },
       statusMessage: `Placed "${instanceName}"${snapNote}`,
     });
@@ -580,15 +849,24 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     }),
 
   renameInstance: (instanceId, name) =>
-    set((state) => ({
-      isDirty: true,
-      scene: {
-        ...state.scene,
-        instances: state.scene.instances.map((inst) =>
-          inst.id === instanceId ? { ...inst, name } : inst
-        ),
-      },
-    })),
+    set((state) => {
+      const nextInstances = state.scene.instances.map((inst) =>
+        inst.id === instanceId ? { ...inst, name } : inst
+      );
+      const nextTagMap = syncPlcTagMapWithScene(
+        nextInstances,
+        state.scene.componentLibrary,
+        state.scene.plcTagMap
+      );
+      return {
+        isDirty: true,
+        scene: {
+          ...state.scene,
+          instances: nextInstances,
+          plcTagMap: nextTagMap,
+        },
+      };
+    }),
 
   toggleInstanceVisibility: (instanceId) =>
     set((state) => {
@@ -640,44 +918,61 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     };
 
     const nextInstances = [...state.scene.instances, duplicated];
-    const nextConnections = recomputeSceneSnapConnections(
+    const catalogMap = getCatalogMap(state.scene.componentLibrary);
+    const nextConnections = recomputeSceneSnapConnections(nextInstances, catalogMap);
+    const nextTagMap = syncPlcTagMapWithScene(
       nextInstances,
-      getCatalogMap(state.scene.componentLibrary)
+      state.scene.componentLibrary,
+      state.scene.plcTagMap
     );
+    runtimeBusClient.syncTagMap(nextTagMap);
 
     set({
       isDirty: true,
       selectedInstanceId: dupId,
+      jogPreview: null,
       scene: {
         ...state.scene,
         instances: nextInstances,
         snapConnections: nextConnections,
+        plcTagMap: nextTagMap,
       },
       statusMessage: `Duplicated "${target.name}" -> "${duplicated.name}"`,
     });
   },
 
-  deleteInstance: (instanceId) =>
-    set((state) => {
-      const removed = state.scene.instances.find((i) => i.id === instanceId);
-      const nextInstances = state.scene.instances.filter((i) => i.id !== instanceId);
-      const nextConnections = recomputeSceneSnapConnections(
-        nextInstances,
-        getCatalogMap(state.scene.componentLibrary)
-      );
-      return {
-        isDirty: true,
-        selectedInstanceId:
-          state.selectedInstanceId === instanceId ? null : state.selectedInstanceId,
-        activeSnapPreview: null,
-        scene: {
-          ...state.scene,
-          instances: nextInstances,
-          snapConnections: nextConnections,
-        },
-        statusMessage: removed ? `Deleted "${removed.name}"` : state.statusMessage,
-      };
-    }),
+  deleteInstance: (instanceId) => {
+    const state = get();
+    const removed = state.scene.instances.find((i) => i.id === instanceId);
+    const nextInstances = state.scene.instances.filter((i) => i.id !== instanceId);
+    const nextConnections = recomputeSceneSnapConnections(
+      nextInstances,
+      getCatalogMap(state.scene.componentLibrary)
+    );
+    const nextTagMap = syncPlcTagMapWithScene(
+      nextInstances,
+      state.scene.componentLibrary,
+      state.scene.plcTagMap
+    );
+    runtimeBusClient.syncTagMap(nextTagMap);
+
+    set({
+      isDirty: true,
+      selectedInstanceId:
+        state.selectedInstanceId === instanceId ? null : state.selectedInstanceId,
+      selectedSubMeshName:
+        state.selectedInstanceId === instanceId ? null : state.selectedSubMeshName,
+      jogPreview: null,
+      activeSnapPreview: null,
+      scene: {
+        ...state.scene,
+        instances: nextInstances,
+        snapConnections: nextConnections,
+        plcTagMap: nextTagMap,
+      },
+      statusMessage: removed ? `Deleted "${removed.name}"` : state.statusMessage,
+    });
+  },
 
   addSnapPort: (componentId, role) =>
     set((state) => {

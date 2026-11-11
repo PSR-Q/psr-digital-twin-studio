@@ -90,6 +90,38 @@ export class BinaryIpcBufferView {
     this.bytes.set(frame.subarray(0, len), 0);
   }
 
+  /**
+   * Copies Worker-owned header telemetry [0..63], PLC_TO_SIM / Force BOOLs [192..575],
+   * and PLC_TO_SIM numeric setpoint registers (lower half of INT16/DINT32/FLOAT32)
+   * without overwriting Renderer-owned SIM_TO_PLC feedback bits & actual value registers.
+   */
+  public copyWorkerTelemetryAndOutputs(frame: Uint8Array): void {
+    if (frame.byteLength < 4096) return;
+    this.bytes.set(frame.subarray(0, 64), 0);
+    this.bytes.set(frame.subarray(192, 576), 192);
+    // INT16 PLC_TO_SIM slots [0..127] -> bytes [576..831]
+    this.bytes.set(frame.subarray(576, 832), 576);
+    // DINT32 PLC_TO_SIM slots [0..127] -> bytes [1088..1599]
+    this.bytes.set(frame.subarray(1088, 1600), 1088);
+    // FLOAT32 PLC_TO_SIM slots [0..247] -> bytes [2112..3103]
+    this.bytes.set(frame.subarray(2112, 3104), 2112);
+  }
+
+  /**
+   * Copies Renderer-owned SIM_TO_PLC BOOL bits [64..191] and SIM_TO_PLC numeric feedback
+   * registers (upper half of INT16/DINT32/FLOAT32) into the Worker buffer.
+   */
+  public copySimInputsFromRenderer(frame: Uint8Array): void {
+    if (frame.byteLength < 4096) return;
+    this.bytes.set(frame.subarray(64, 192), 64);
+    // INT16 SIM_TO_PLC slots [128..255] -> bytes [832..1087]
+    this.bytes.set(frame.subarray(832, 1088), 832);
+    // DINT32 SIM_TO_PLC slots [128..255] -> bytes [1600..2111]
+    this.bytes.set(frame.subarray(1600, 2112), 1600);
+    // FLOAT32 SIM_TO_PLC slots [248..495] -> bytes [3104..4095]
+    this.bytes.set(frame.subarray(3104, 4096), 3104);
+  }
+
   public writeTelemetry(
     sequenceTick: number,
     timestampMs: number,
@@ -141,6 +173,10 @@ export class BinaryIpcBufferView {
 
   public writePlcToSimBool(slot: number, value: boolean): void {
     this.writeBit(this.layout.plcToSimBoolOffset, slot, value);
+  }
+
+  public isForceBoolEnabled(slot: number): boolean {
+    return this.readBit(this.layout.forceMaskBoolOffset, slot);
   }
 
   public setForceBool(slot: number, enabled: boolean, forcedValue: boolean): void {

@@ -1,6 +1,7 @@
 import {
   BinaryIpcBufferView,
   type BinaryTelemetrySnapshot,
+  type PlcTagBinding,
   type PlcTagMap,
   type SimulationRunState,
 } from '../shared/schemas';
@@ -11,7 +12,7 @@ import {
  * Inside Electron (.exe), subscribes directly to raw Uint8Array IPC frames emitted by
  * the UtilityProcess PLC Worker.
  * Inside Browser Live Preview, runs an identical 10ms high-resolution fallback scan loop
- * so telemetry and future FK / Encoder buffers work identically in both environments!
+ * so telemetry and FK / Encoder buffers work identically in both environments!
  */
 
 class RuntimeBusClient {
@@ -38,7 +39,7 @@ class RuntimeBusClient {
 
     if (typeof window !== 'undefined' && window.electronAPI) {
       window.electronAPI.onPlcBinaryFrame((frame) => {
-        this.bufferView.copyFromFrame(frame);
+        this.bufferView.copyWorkerTelemetryAndOutputs(frame);
       });
       return;
     }
@@ -79,9 +80,59 @@ class RuntimeBusClient {
     }
   }
 
+  public applyBindingForceToBuffer(binding: PlcTagBinding): void {
+    if (binding.direction !== 'PLC_TO_SIM') return;
+
+    if (binding.dataType === 'BOOL') {
+      this.bufferView.setForceBool(
+        binding.bufferSlotIndex,
+        binding.manualForceEnabled,
+        Boolean(binding.manualForceValue)
+      );
+      if (!binding.manualForceEnabled) {
+        this.bufferView.writePlcToSimBool(binding.bufferSlotIndex, false);
+      }
+      return;
+    }
+
+    const numVal = Number(binding.manualForceValue ?? 0);
+    if (binding.dataType === 'INT16') {
+      this.bufferView.writeInt16(binding.bufferSlotIndex, numVal);
+    } else if (binding.dataType === 'DINT32') {
+      this.bufferView.writeDint32(binding.bufferSlotIndex, numVal);
+    } else if (binding.dataType === 'FLOAT32') {
+      this.bufferView.writeFloat32(binding.bufferSlotIndex, numVal);
+    }
+  }
+
   public syncTagMap(tagMap: PlcTagMap): void {
+    for (let i = 0; i < tagMap.bindings.length; i++) {
+      this.applyBindingForceToBuffer(tagMap.bindings[i]);
+    }
     if (typeof window !== 'undefined' && window.electronAPI) {
       window.electronAPI.configurePlcTagMap(tagMap);
+    }
+  }
+
+  public readBindingLiveValue(binding: PlcTagBinding): boolean | number {
+    if (binding.dataType === 'BOOL') {
+      return binding.direction === 'PLC_TO_SIM'
+        ? this.bufferView.readPlcToSimBool(binding.bufferSlotIndex)
+        : this.bufferView.readSimToPlcBool(binding.bufferSlotIndex);
+    }
+    if (binding.dataType === 'INT16') {
+      return this.bufferView.readInt16(binding.bufferSlotIndex);
+    }
+    if (binding.dataType === 'DINT32') {
+      return this.bufferView.readDint32(binding.bufferSlotIndex);
+    }
+    return this.bufferView.readFloat32(binding.bufferSlotIndex);
+  }
+
+  /** Push SIM_TO_PLC feedback frame to Electron UtilityProcess Worker when running in desktop mode */
+  public pushSimInputsToWorker(): void {
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      window.electronAPI.pushBinaryCommandFrame(this.bufferView.bytes);
     }
   }
 

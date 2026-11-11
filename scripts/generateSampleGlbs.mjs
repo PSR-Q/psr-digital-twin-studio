@@ -189,8 +189,10 @@ function packGlb({ rootName, parts }) {
   const childIndices = [];
 
   parts.forEach((part, idx) => {
+    const isTranslucent = Array.isArray(part.color) && part.color[3] < 1.0;
     materials.push({
       name: `${part.name}_Mat`,
+      ...(isTranslucent ? { alphaMode: 'BLEND', doubleSided: true } : {}),
       pbrMetallicRoughness: {
         baseColorFactor: part.color,
         metallicFactor: part.metallic ?? 0.45,
@@ -434,9 +436,14 @@ function buildMixingTankGlb() {
   // RotaryAxis target sub-mesh (spins continuously around [0, 1, 0])
   const agitatorGeom = mergeGeometries([
     createCylinderYGeometry(0.045, 1.45, 18, [0, 0, 0]),
-    createBoxGeometry(0.76, 0.08, 0.04, [0, -0.45, 0]),
-    createBoxGeometry(0.04, 0.08, 0.76, [0, -0.45, 0]),
-    createCylinderYGeometry(0.14, 0.28, 20, [0, 0.78, 0]),
+    // Dual-tier mixing impeller paddles visible inside translucent tank
+    createBoxGeometry(0.84, 0.09, 0.045, [0, -0.45, 0]),
+    createBoxGeometry(0.045, 0.09, 0.84, [0, -0.45, 0]),
+    createBoxGeometry(0.66, 0.07, 0.04, [0, -0.08, 0]),
+    createBoxGeometry(0.04, 0.07, 0.66, [0, -0.08, 0]),
+    // Top gearbox hub + visible rotary encoder flag bar above vessel roof
+    createCylinderYGeometry(0.14, 0.24, 20, [0, 0.76, 0]),
+    createBoxGeometry(0.42, 0.045, 0.08, [0, 0.91, 0]),
   ]);
 
   return packGlb({
@@ -452,16 +459,16 @@ function buildMixingTankGlb() {
       {
         name: 'Stainless_Tank_Vessel',
         geometry: vesselGeom,
-        color: [0.64, 0.7, 0.76, 1.0],
-        metallic: 0.82,
-        roughness: 0.24,
+        color: [0.58, 0.68, 0.78, 0.44],
+        metallic: 0.35,
+        roughness: 0.2,
       },
       {
         name: 'Agitator_Impeller_Axis',
         geometry: agitatorGeom,
         translation: [0, 1.22, 0],
-        color: [0.14, 0.62, 0.78, 1.0],
-        metallic: 0.6,
+        color: [0.14, 0.68, 0.84, 1.0],
+        metallic: 0.55,
         roughness: 0.28,
       },
     ],
@@ -654,17 +661,17 @@ def Xform "CartesianGantryCell"
         double radius = 0.045
         double3 xformOp:translate = (0, 0, 1.18)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
 
-    def Cube "Vacuum_Gripper_Tool_Axis" (
-        prepend apiSchemas = ["MaterialBindingAPI"]
-    )
-    {
-        rel material:binding = </CartesianGantryCell/Materials/GripperAmberMat>
-        double size = 1.0
-        double3 xformOp:translate = (0, 0, 0.97)
-        double3 xformOp:scale = (0.24, 0.20, 0.05)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        def Cube "Vacuum_Gripper_Tool_Axis" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </CartesianGantryCell/Materials/GripperAmberMat>
+            double size = 1.0
+            double3 xformOp:translate = (0, 0, -0.21)
+            double3 xformOp:scale = (0.24, 0.20, 0.05)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
     }
 
     def Cylinder "Safety_Beacon_Lamp" (

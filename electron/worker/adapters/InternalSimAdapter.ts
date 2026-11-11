@@ -28,20 +28,26 @@ export class InternalSimAdapter implements IPlcAdapter {
   public executeScanCycle(bufferView: BinaryIpcBufferView, tagMap: PlcTagMap): void {
     for (let i = 0; i < tagMap.bindings.length; i++) {
       const binding = tagMap.bindings[i];
-      if (!binding.manualForceEnabled) continue;
+      if (binding.direction !== 'PLC_TO_SIM') continue;
 
       if (binding.dataType === 'BOOL') {
         bufferView.setForceBool(
           binding.bufferSlotIndex,
-          true,
+          binding.manualForceEnabled,
           Boolean(binding.manualForceValue)
         );
-      } else if (binding.dataType === 'INT16') {
-        bufferView.writeInt16(binding.bufferSlotIndex, Number(binding.manualForceValue));
-      } else if (binding.dataType === 'DINT32') {
-        bufferView.writeDint32(binding.bufferSlotIndex, Number(binding.manualForceValue));
-      } else if (binding.dataType === 'FLOAT32') {
-        bufferView.writeFloat32(binding.bufferSlotIndex, Number(binding.manualForceValue));
+        if (!binding.manualForceEnabled) {
+          bufferView.writePlcToSimBool(binding.bufferSlotIndex, false);
+        }
+      } else {
+        const numericVal = Number(binding.manualForceValue ?? 0);
+        if (binding.dataType === 'INT16') {
+          bufferView.writeInt16(binding.bufferSlotIndex, numericVal);
+        } else if (binding.dataType === 'DINT32') {
+          bufferView.writeDint32(binding.bufferSlotIndex, numericVal);
+        } else if (binding.dataType === 'FLOAT32') {
+          bufferView.writeFloat32(binding.bufferSlotIndex, numericVal);
+        }
       }
     }
   }

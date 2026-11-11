@@ -44,7 +44,7 @@ jobs:
       - name: Upload Windows .exe Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VC-Digital-Twin-Studio-Windows-Portable-EXE
+          name: PSR-Digital-Twin-Studio-Windows-Portable-EXE
           path: release/*.exe
           if-no-files-found: error
 
@@ -52,14 +52,14 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.0-milestone1
-          name: "Milestone 1 — Standalone 3D Editor & SnapPort Engine (.exe)"
+          tag_name: v0.2.0-milestone2
+          name: "Milestone 2 — Component Builder (Linear/Rotary FK) & Signal Force Console (.exe)"
           body: |
-            ### Milestone 1 Deliverable — Standalone Windows `.exe`
-            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.1.0-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
-            - **Included Features:**
-              1. Electron + React 19 + R3F 3D CAD Workbench + UtilityProcess Cyclic Bus
-              2. Drag-and-drop `.glb` / `.gltf` loader with automatic bounding-box `SnapPort` generation + built-in industrial `.glb` catalog
-              3. Decoupled `TransformControls` Gizmo (`Move / Rotate / Scale`) with magnetic `InputPort <-> OutputPort` alignment & docking
-              4. Self-contained Scene `.json` Save/Load & `.vcomp.json` Component export
+            ### Milestone 2 Deliverable — Standalone Windows `.exe`
+            - **Zero-install Portable Executable:** Download the `.exe` below and double-click to launch on Windows 10/11 (x64).
+            - **Included Features (Milestones 1 + 2):**
+              1. Unified `.glb` / `.gltf` & **OpenUSD (`.usd`, `.usda`, `.usdc`, `.usdz`)** 3D importer + magnetic `SnapPort` docking + Scene `.json` Save/Load
+              2. **Interactive 3D Component Builder:** Click or double-click any 3D sub-mesh to assign `LinearAxis`, `RotaryAxis`, or `VisualEffect`, configure stroke/angle limits, parent-axis chaining, and live Jog testing
+              3. **60–144Hz Zero-Re-Render Forward Kinematics Engine:** Pneumatic cylinders with automatic `DI_ReedRetracted` / `DI_ReedExtended` limits, Trapezoidal Servo positioning (`DI_InPosition`), Continuous RPM rotary motors, Bounded indexing tables, and procedural conveyor belt UV-scrolling
+              4. **Signal Force Console (`Force I/O`):** Latching Force ON/OFF switches, momentary `JOG` pushbuttons, analog setpoint sliders, and live 10Hz `SIM_TO_PLC` sensor LEDs without requiring an external PLC
           files: release/*.exe

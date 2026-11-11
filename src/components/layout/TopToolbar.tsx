@@ -14,6 +14,7 @@ import {
   RotateCw,
   Save,
   Sparkles,
+  Zap,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { runtimeBusClient } from '../../engine/runtimeBusClient';
@@ -26,6 +27,10 @@ export function TopToolbar() {
   const env = useEditorStore((s) => s.scene.environment);
   const gizmoMode = useEditorStore((s) => s.gizmoMode);
   const runState = useEditorStore((s) => s.runState);
+  const inspectorTab = useEditorStore((s) => s.inspectorTab);
+  const forcedCount = useEditorStore(
+    (s) => s.scene.plcTagMap.bindings.filter((b) => b.manualForceEnabled).length
+  );
   const isDirty = useEditorStore((s) => s.isDirty);
 
   const renameScene = useEditorStore((s) => s.renameScene);
@@ -35,6 +40,7 @@ export function TopToolbar() {
   const openSceneInteractive = useEditorStore((s) => s.openSceneInteractive);
   const saveSceneInteractive = useEditorStore((s) => s.saveSceneInteractive);
   const setGizmoMode = useEditorStore((s) => s.setGizmoMode);
+  const setInspectorTab = useEditorStore((s) => s.setInspectorTab);
   const updateEnvironment = useEditorStore((s) => s.updateEnvironment);
   const setRunState = useEditorStore((s) => s.setRunState);
   const setSimSpeedMultiplier = useEditorStore((s) => s.setSimSpeedMultiplier);
@@ -61,7 +67,7 @@ export function TopToolbar() {
         <div className="vc-brand-mark" title="Standalone 3D Industrial Virtual Commissioning">
           <Box size={16} />
           <span className="vc-brand-title">VC TWIN</span>
-          <span className="vc-milestone-tag">M1</span>
+          <span className="vc-milestone-tag">M2</span>
         </div>
 
         <div className="vc-scene-title-wrap">
@@ -256,6 +262,23 @@ export function TopToolbar() {
             </option>
           ))}
         </select>
+
+        <button
+          id="btn-toolbar-force-io"
+          type="button"
+          className={`vc-tool-btn ${
+            inspectorTab === 'signals' || forcedCount > 0
+              ? 'vc-tool-btn-accent'
+              : ''
+          }`}
+          onClick={() =>
+            setInspectorTab(inspectorTab === 'signals' ? 'transform' : 'signals')
+          }
+          title="Open Signal Force Console (Manual Actuator & Sensor Testing)"
+        >
+          <Zap size={13} />
+          <span>Force I/O{forcedCount > 0 ? ` (${forcedCount})` : ''}</span>
+        </button>
 
         <div
           id="plc-telemetry-badge"

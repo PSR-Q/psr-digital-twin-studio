@@ -10,12 +10,13 @@ import { useEditorStore } from './store/editorStore';
 export function App() {
   useEffect(() => {
     runtimeBusClient.init();
+    runtimeBusClient.syncTagMap(useEditorStore.getState().scene.plcTagMap);
     return () => {
       runtimeBusClient.dispose();
     };
   }, []);
 
-  // Industrial CAD Keyboard Shortcuts (W/E/R Gizmo, Del Remove, Ctrl+D Dup, Ctrl+S Save JSON)
+  // Industrial CAD Keyboard Shortcuts (W/E/R Gizmo, Space Run/Pause, Del Remove, Ctrl+D Dup, Ctrl+S Save)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -45,6 +46,12 @@ export function App() {
         return;
       }
 
+      if (e.code === 'Space') {
+        e.preventDefault();
+        store.setRunState(store.runState === 'RUNNING' ? 'PAUSED' : 'RUNNING');
+        return;
+      }
+
       switch (e.key.toLowerCase()) {
         case 'w':
           store.setGizmoMode('translate');
@@ -62,7 +69,11 @@ export function App() {
           }
           break;
         case 'escape':
-          store.selectInstance(null);
+          if (store.selectedSubMeshName) {
+            store.selectSubMesh(null);
+          } else {
+            store.selectInstance(null);
+          }
           break;
       }
     };

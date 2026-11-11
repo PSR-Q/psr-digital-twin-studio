@@ -101,7 +101,7 @@ if (process.parentPort) {
         restartLoop(tagMap.scanCycleMs);
       }
     } else if (msg.type === 'cmd-frame' && msg.frame) {
-      bufferView.copyFromFrame(msg.frame);
+      bufferView.copySimInputsFromRenderer(msg.frame);
     }
   });
 }

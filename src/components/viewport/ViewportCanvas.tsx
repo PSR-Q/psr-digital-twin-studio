@@ -153,9 +153,16 @@ function DropRaycasterBridge({
     };
   }, [bridgeRef, camera, gl, raycaster]);
 
+  const ipcPushAccumRef = useRef(0);
+
   // Read BinaryIpcBufferView inside R3F useFrame with ZERO React state re-renders (Spec §2.3)
-  useFrame(() => {
+  useFrame((_, delta) => {
     runtimeBusClient.readTelemetryFast();
+    ipcPushAccumRef.current += delta;
+    if (ipcPushAccumRef.current >= 0.02) {
+      ipcPushAccumRef.current = 0;
+      runtimeBusClient.pushSimInputsToWorker();
+    }
   });
 
   return null;
@@ -285,7 +292,7 @@ export function ViewportCanvas() {
       <div className="vc-viewport-hud-top-left">
         <span className="vc-hud-pill">PERSPECTIVE · Y-UP · METRIC (m)</span>
         <span className="vc-hud-pill vc-hud-pill-muted">
-          LMB Select/Gizmo · RMB Pan · Scroll Zoom · Drop .GLB / OpenUSD Anywhere
+          Click Select · Double-Click Part = Axis Builder · Drop .GLB / OpenUSD Anywhere
         </span>
       </div>
 

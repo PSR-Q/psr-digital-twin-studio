@@ -1,16 +1,18 @@
 import {
-  Cpu,
   ExternalLink,
-  GitBranch,
   Link2,
   Magnet,
   Plus,
   Sliders,
   Trash2,
+  Wrench,
+  Zap,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import type { SnapPortDefinition, Vector3Tuple } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
+import { ComponentBuilderPanel } from '../inspector/ComponentBuilderPanel';
+import { SignalForcePanel } from '../inspector/SignalForcePanel';
 
 const NORMAL_PRESETS: Array<{ label: string; vec: Vector3Tuple }> = [
   { label: '-X (Left)', vec: [-1, 0, 0] },
@@ -22,12 +24,14 @@ const NORMAL_PRESETS: Array<{ label: string; vec: Vector3Tuple }> = [
 ];
 
 export function RightInspector() {
-  const [activeTab, setActiveTab] = useState<'transform' | 'hierarchy'>('transform');
+  const inspectorTab = useEditorStore((s) => s.inspectorTab);
+  const setInspectorTab = useEditorStore((s) => s.setInspectorTab);
 
   const selectedInstanceId = useEditorStore((s) => s.selectedInstanceId);
   const instances = useEditorStore((s) => s.scene.instances);
   const library = useEditorStore((s) => s.scene.componentLibrary);
   const snapConnections = useEditorStore((s) => s.scene.snapConnections);
+  const bindings = useEditorStore((s) => s.scene.plcTagMap.bindings);
   const env = useEditorStore((s) => s.scene.environment);
 
   const renameInstance = useEditorStore((s) => s.renameInstance);
@@ -62,78 +66,17 @@ export function RightInspector() {
     );
   }, [snapConnections, selectedInstance]);
 
-  if (!selectedInstance || !selectedComponent) {
-    return (
-      <aside id="vc-right-inspector" className="vc-right-dock">
-        <div className="vc-pane-header">
-          <div className="vc-pane-title">
-            <Sliders size={14} />
-            <span>INSPECTOR · SCENE SETTINGS</span>
-          </div>
-        </div>
-
-        <div className="vc-inspector-scroll">
-          <div className="vc-inspector-card">
-            <div className="vc-section-label">MAGNETIC SNAP ENGINE</div>
-
-            <label className="vc-toggle-row" htmlFor="chk-auto-align-rot">
-              <span>Auto-Align Mating Port Normals</span>
-              <input
-                id="chk-auto-align-rot"
-                type="checkbox"
-                checked={env.autoAlignPortRotation}
-                onChange={(e) =>
-                  updateEnvironment({ autoAlignPortRotation: e.target.checked })
-                }
-              />
-            </label>
-
-            <label className="vc-toggle-row" htmlFor="chk-show-snap-ports">
-              <span>Show 3D SnapPort Indicators</span>
-              <input
-                id="chk-show-snap-ports"
-                type="checkbox"
-                checked={env.showSnapPorts}
-                onChange={(e) =>
-                  updateEnvironment({ showSnapPorts: e.target.checked })
-                }
-              />
-            </label>
-          </div>
-
-          <div className="vc-inspector-card">
-            <div className="vc-section-label">SCENE SUMMARY</div>
-            <div className="vc-kv-row">
-              <span>Component Library</span>
-              <strong className="vc-mono-text">{library.length} definitions</strong>
-            </div>
-            <div className="vc-kv-row">
-              <span>Placed Instances</span>
-              <strong className="vc-mono-text">{instances.length} machines</strong>
-            </div>
-            <div className="vc-kv-row">
-              <span>Active Snap Links</span>
-              <strong className="vc-mono-text vc-emerald-text">
-                {snapConnections.length} docked
-              </strong>
-            </div>
-          </div>
-
-          <div className="vc-empty-hint">
-            Click any 3D machine in the viewport or Scene Hierarchy to inspect its
-            6-DOF transform, customize magnetic <code>SnapPorts</code>, or view its{' '}
-            <code>.glb</code> sub-mesh tree.
-          </div>
-        </div>
-      </aside>
-    );
-  }
+  const activeForceCount = useMemo(
+    () => bindings.filter((b) => b.manualForceEnabled).length,
+    [bindings]
+  );
 
   const updateVecAxis = (
     field: 'position' | 'rotationDeg' | 'scale',
     axisIdx: 0 | 1 | 2,
     rawVal: string
   ) => {
+    if (!selectedInstance) return;
     const parsed = Number(rawVal);
     if (Number.isNaN(parsed)) return;
     const nextTuple = [...selectedInstance.transform[field]] as Vector3Tuple;
@@ -149,6 +92,7 @@ export function RightInspector() {
   };
 
   const quickRotateY = (yawDeg: number) => {
+    if (!selectedInstance) return;
     const [rx, , rz] = selectedInstance.transform.rotationDeg;
     updateInstanceTransform(
       selectedInstance.id,
@@ -165,6 +109,7 @@ export function RightInspector() {
     axisIdx: 0 | 1 | 2,
     val: string
   ) => {
+    if (!selectedComponent) return;
     const num = Number(val);
     if (Number.isNaN(num)) return;
     const nextPos = [...port.localPosition] as Vector3Tuple;
@@ -177,64 +122,175 @@ export function RightInspector() {
       <div className="vc-pane-header">
         <div className="vc-pane-title">
           <Sliders size={14} />
-          <span>INSPECTOR</span>
+          <span>
+            {selectedInstance ? 'INSPECTOR & BUILDER' : 'INSPECTOR · PLANT'}
+          </span>
         </div>
-        <button
-          id="btn-export-vcomp"
-          type="button"
-          className="vc-mini-action-btn"
-          onClick={() => void exportComponentVcompInteractive(selectedComponent.id)}
-          title="Export reusable .vcomp.json Component Definition"
-        >
-          <ExternalLink size={11} />
-          <span>.vcomp</span>
-        </button>
+        {selectedComponent && (
+          <button
+            id="btn-export-vcomp"
+            type="button"
+            className="vc-mini-action-btn"
+            onClick={() =>
+              void exportComponentVcompInteractive(selectedComponent.id)
+            }
+            title="Export reusable .vcomp.json Component Definition"
+          >
+            <ExternalLink size={11} />
+            <span>.vcomp</span>
+          </button>
+        )}
       </div>
 
-      {/* Inspector Mode Tabs */}
+      {/* 3-Mode Inspector Tabs (Always Accessible) */}
       <div className="vc-inspector-tabs">
         <button
           id="tab-inspector-transform"
           type="button"
-          className={`vc-insp-tab ${activeTab === 'transform' ? 'active' : ''}`}
-          onClick={() => setActiveTab('transform')}
+          className={`vc-insp-tab ${inspectorTab === 'transform' ? 'active' : ''}`}
+          onClick={() => setInspectorTab('transform')}
         >
-          <Magnet size={13} />
-          <span>Transform & SnapPorts</span>
+          <Magnet size={12} />
+          <span>Layout</span>
         </button>
         <button
-          id="tab-inspector-hierarchy"
+          id="tab-inspector-builder"
           type="button"
-          className={`vc-insp-tab ${activeTab === 'hierarchy' ? 'active' : ''}`}
-          onClick={() => setActiveTab('hierarchy')}
+          className={`vc-insp-tab ${inspectorTab === 'builder' ? 'active' : ''}`}
+          onClick={() => setInspectorTab('builder')}
         >
-          <GitBranch size={13} />
-          <span>3D Nodes & I/O</span>
+          <Wrench size={12} />
+          <span>Builder</span>
+        </button>
+        <button
+          id="tab-inspector-signals"
+          type="button"
+          className={`vc-insp-tab ${inspectorTab === 'signals' ? 'active' : ''}`}
+          onClick={() => setInspectorTab('signals')}
+        >
+          <Zap
+            size={12}
+            className={activeForceCount > 0 ? 'vc-amber-text' : undefined}
+          />
+          <span>
+            Force I/O{activeForceCount > 0 ? ` (${activeForceCount})` : ''}
+          </span>
         </button>
       </div>
 
       <div className="vc-inspector-scroll">
-        {/* Selected Machine Identity */}
-        <div className="vc-inspector-card">
-          <label className="vc-field-label" htmlFor="input-instance-name">
-            INSTANCE IDENTIFIER
-          </label>
-          <input
-            id="input-instance-name"
-            type="text"
-            value={selectedInstance.name}
-            onChange={(e) => renameInstance(selectedInstance.id, e.target.value)}
-            className="vc-text-input"
-          />
-          <div className="vc-source-meta">
-            <span>Asset: {selectedComponent.modelSource.fileName}</span>
-            <span>
-              BBox: {selectedComponent.boundingBox.size.map((n) => n.toFixed(2)).join('×')}m
-            </span>
+        {/* Selected Machine Identity Header (shown in Layout & Builder modes when selected) */}
+        {selectedInstance && selectedComponent && inspectorTab !== 'signals' && (
+          <div className="vc-inspector-card">
+            <label className="vc-field-label" htmlFor="input-instance-name">
+              INSTANCE IDENTIFIER
+            </label>
+            <input
+              id="input-instance-name"
+              type="text"
+              value={selectedInstance.name}
+              onChange={(e) => renameInstance(selectedInstance.id, e.target.value)}
+              className="vc-text-input"
+            />
+            <div className="vc-source-meta">
+              <span>Asset: {selectedComponent.modelSource.fileName}</span>
+              <span>
+                BBox:{' '}
+                {selectedComponent.boundingBox.size
+                  .map((n) => n.toFixed(2))
+                  .join('×')}
+                m
+              </span>
+            </div>
           </div>
-        </div>
+        )}
 
-        {activeTab === 'transform' ? (
+        {/* TAB 3: SIGNAL FORCE CONSOLE (Works for Selected Machine OR All Scene!) */}
+        {inspectorTab === 'signals' ? (
+          <SignalForcePanel />
+        ) : !selectedInstance || !selectedComponent ? (
+          <>
+            {inspectorTab === 'builder' && (
+              <div className="vc-inspector-card">
+                <div className="vc-section-label">
+                  <Wrench size={12} className="vc-amber-text" />
+                  <span>COMPONENT BUILDER</span>
+                </div>
+                <div className="vc-subtle-note">
+                  Click or double-click any 3D machine in the Viewport to inspect its{' '}
+                  <code>.glb</code> / <code>OpenUSD</code> sub-meshes and configure{' '}
+                  <strong>LinearAxis</strong> or <strong>RotaryAxis</strong> joints.
+                </div>
+              </div>
+            )}
+
+            <div className="vc-inspector-card">
+              <div className="vc-section-label">MAGNETIC SNAP ENGINE</div>
+
+              <label className="vc-toggle-row" htmlFor="chk-auto-align-rot">
+                <span>Auto-Align Mating Port Normals</span>
+                <input
+                  id="chk-auto-align-rot"
+                  type="checkbox"
+                  checked={env.autoAlignPortRotation}
+                  onChange={(e) =>
+                    updateEnvironment({ autoAlignPortRotation: e.target.checked })
+                  }
+                />
+              </label>
+
+              <label className="vc-toggle-row" htmlFor="chk-show-snap-ports">
+                <span>Show 3D SnapPort Indicators</span>
+                <input
+                  id="chk-show-snap-ports"
+                  type="checkbox"
+                  checked={env.showSnapPorts}
+                  onChange={(e) =>
+                    updateEnvironment({ showSnapPorts: e.target.checked })
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="vc-inspector-card">
+              <div className="vc-section-label">SCENE SUMMARY</div>
+              <div className="vc-kv-row">
+                <span>Component Library</span>
+                <strong className="vc-mono-text">
+                  {library.length} definitions
+                </strong>
+              </div>
+              <div className="vc-kv-row">
+                <span>Placed Instances</span>
+                <strong className="vc-mono-text">{instances.length} machines</strong>
+              </div>
+              <div className="vc-kv-row">
+                <span>Active Snap Links</span>
+                <strong className="vc-mono-text vc-emerald-text">
+                  {snapConnections.length} docked
+                </strong>
+              </div>
+              <div className="vc-kv-row">
+                <span>Mapped I/O Tags</span>
+                <strong className="vc-mono-text vc-cyan-text">
+                  {bindings.length} signals
+                </strong>
+              </div>
+            </div>
+
+            <div className="vc-empty-hint">
+              Select any 3D machine to edit 6-DOF transforms &{' '}
+              <code>SnapPorts</code>, double-click a part to configure{' '}
+              <strong>Linear/Rotary Axes</strong>, or open{' '}
+              <strong>Force I/O</strong> above to run actuators live.
+            </div>
+          </>
+        ) : inspectorTab === 'builder' ? (
+          <ComponentBuilderPanel
+            instance={selectedInstance}
+            component={selectedComponent}
+          />
+        ) : (
           <>
             {/* 6-DOF World Transform */}
             <div className="vc-inspector-card">
@@ -293,7 +349,11 @@ export function RightInspector() {
                         step={5}
                         value={selectedInstance.transform.rotationDeg[idx]}
                         onChange={(e) =>
-                          updateVecAxis('rotationDeg', idx as 0 | 1 | 2, e.target.value)
+                          updateVecAxis(
+                            'rotationDeg',
+                            idx as 0 | 1 | 2,
+                            e.target.value
+                          )
                         }
                       />
                     </label>
@@ -327,12 +387,15 @@ export function RightInspector() {
             <div className="vc-inspector-card">
               <div className="vc-section-label">
                 <Link2 size={12} />
-                <span>ACTIVE MAGNETIC CONNECTIONS ({instanceConnections.length})</span>
+                <span>
+                  ACTIVE MAGNETIC CONNECTIONS ({instanceConnections.length})
+                </span>
               </div>
 
               {instanceConnections.length === 0 ? (
                 <div className="vc-subtle-note">
-                  Not snapped yet. Drag with Move Gizmo near a compatible Input/Output port.
+                  Not snapped yet. Drag with Move Gizmo near a compatible Input/Output
+                  port.
                 </div>
               ) : (
                 <div className="vc-conn-list">
@@ -355,7 +418,7 @@ export function RightInspector() {
               )}
             </div>
 
-            {/* SnapPort Editor for Custom / Imported .glb Components */}
+            {/* SnapPort Editor for Custom / Imported .glb & OpenUSD Components */}
             <div className="vc-inspector-card">
               <div className="vc-section-header-row">
                 <span className="vc-section-label">
@@ -409,7 +472,9 @@ export function RightInspector() {
                         id={`del-port-${port.id}`}
                         type="button"
                         className="vc-tree-icon-btn vc-danger-hover"
-                        onClick={() => deleteSnapPort(selectedComponent.id, port.id)}
+                        onClick={() =>
+                          deleteSnapPort(selectedComponent.id, port.id)
+                        }
                         title="Remove SnapPort"
                       >
                         <Trash2 size={12} />
@@ -458,53 +523,6 @@ export function RightInspector() {
                   </div>
                 ))}
               </div>
-            </div>
-          </>
-        ) : (
-          <>
-            {/* Sub-Mesh Hierarchy & Milestone 2-4 Schema Preview */}
-            <div className="vc-inspector-card">
-              <div className="vc-section-label">
-                DISCOVERED 3D SUB-MESH NODES (
-                {Object.keys(selectedComponent.nodeRoles).length})
-              </div>
-              <div className="vc-node-role-list">
-                {Object.values(selectedComponent.nodeRoles).map((assignment) => (
-                  <div key={assignment.nodeName} className="vc-node-role-row">
-                    <span className="vc-mono-text">{assignment.nodeName}</span>
-                    <span className={`vc-role-chip role-${assignment.role}`}>
-                      {assignment.role}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <div className="vc-subtle-note" style={{ marginTop: 8 }}>
-                Interactive Linear/Rotary Joint Builder & Signal Force Panel unlock in{' '}
-                <strong>Milestone 2</strong>.
-              </div>
-            </div>
-
-            <div className="vc-inspector-card">
-              <div className="vc-section-label">
-                <Cpu size={12} />
-                <span>PRE-MAPPED COMPONENT SIGNALS ({selectedComponent.exposedSignals.length})</span>
-              </div>
-              {selectedComponent.exposedSignals.length === 0 ? (
-                <div className="vc-subtle-note">
-                  Custom .glb signals will be generated automatically when assigning axes/sensors in Milestones 2–4.
-                </div>
-              ) : (
-                <div className="vc-node-role-list">
-                  {selectedComponent.exposedSignals.map((sig) => (
-                    <div key={sig.key} className="vc-node-role-row">
-                      <span>{sig.label}</span>
-                      <span className="vc-mono-text vc-sig-chip">
-                        {sig.direction === 'PLC_TO_SIM' ? 'OUT' : 'IN'} · {sig.dataType}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           </>
         )}
