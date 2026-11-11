@@ -1,10 +1,12 @@
 # Dependencies
 node_modules
 
-# Build outputs
+# Build outputs & generated WASM decoders
 dist
 dist-electron
 release
+public/draco
+public/basis
 *.local
 *.tsbuildinfo
 

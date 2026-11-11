@@ -1,5 +1,8 @@
 import * as THREE from 'three';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 import {
   SCHEMA_VERSION,
   type BoundingBoxData,
@@ -10,7 +13,8 @@ import {
 
 /**
  * Runtime .glb/.gltf Binary Asset Cache & Portable Base64 Serializer
- * Works identically inside packaged Windows .exe (file:// ASAR) and Web Preview.
+ * Supports uncompressed + EXT_meshopt_compression + KHR_draco_mesh_compression + KTX2/Basis
+ * identically inside packaged Windows .exe (file:// ASAR) and Cloud Web Preview.
  */
 
 export interface ParsedGlbAsset {
@@ -20,7 +24,24 @@ export interface ParsedGlbAsset {
   groundOffsetY: number;
 }
 
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath('./draco/');
+
+const ktx2Loader = new KTX2Loader();
+ktx2Loader.setTranscoderPath('./basis/');
+
 const loader = new GLTFLoader();
+loader.setMeshoptDecoder(MeshoptDecoder);
+loader.setDRACOLoader(dracoLoader);
+loader.setKTX2Loader(ktx2Loader);
+
+let ktx2Configured = false;
+export function configureGlbRendererSupport(renderer: THREE.WebGLRenderer): void {
+  if (ktx2Configured) return;
+  ktx2Configured = true;
+  ktx2Loader.detectSupport(renderer);
+}
+
 const parsedCache = new Map<string, Promise<ParsedGlbAsset>>();
 
 export function arrayBufferToBase64(buffer: ArrayBuffer): string {
@@ -49,15 +70,17 @@ function inspectGltfScene(gltf: GLTF): ParsedGlbAsset {
   root.updateMatrixWorld(true);
 
   const subMeshNames: string[] = [];
+  let unnamedIndex = 1;
   root.traverse((obj) => {
     if ((obj as THREE.Mesh).isMesh) {
       const mesh = obj as THREE.Mesh;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      if (mesh.name && !subMeshNames.includes(mesh.name)) {
+      if (!mesh.name) {
+        mesh.name = mesh.parent?.name || `SubMesh_${unnamedIndex++}`;
+      }
+      if (!subMeshNames.includes(mesh.name)) {
         subMeshNames.push(mesh.name);
-      } else if (mesh.parent?.name && !subMeshNames.includes(mesh.parent.name)) {
-        subMeshNames.push(mesh.parent.name);
       }
     }
   });

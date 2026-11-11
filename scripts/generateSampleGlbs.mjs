@@ -504,8 +504,36 @@ function buildRotaryTurntableGlb() {
   });
 }
 
+async function copyThreeDecoders() {
+  const threeLibs = path.resolve(
+    __dirname,
+    '..',
+    'node_modules',
+    'three',
+    'examples',
+    'jsm',
+    'libs'
+  );
+  const dracoSrc = path.join(threeLibs, 'draco', 'gltf');
+  const basisSrc = path.join(threeLibs, 'basis');
+  const dracoDest = path.resolve(__dirname, '..', 'public', 'draco');
+  const basisDest = path.resolve(__dirname, '..', 'public', 'basis');
+
+  await fs.mkdir(dracoDest, { recursive: true });
+  await fs.mkdir(basisDest, { recursive: true });
+
+  for (const file of await fs.readdir(dracoSrc)) {
+    await fs.copyFile(path.join(dracoSrc, file), path.join(dracoDest, file));
+  }
+  for (const file of await fs.readdir(basisSrc)) {
+    await fs.copyFile(path.join(basisSrc, file), path.join(basisDest, file));
+  }
+  console.log('Copied offline Draco & KTX2/Basis WASM decoders to public/');
+}
+
 async function main() {
   await fs.mkdir(OUT_DIR, { recursive: true });
+  await copyThreeDecoders();
 
   const files = [
     ['belt-conveyor-2m.glb', buildConveyorGlb(2.0, 'Belt_Conveyor_2m')],

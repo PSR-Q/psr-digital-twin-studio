@@ -8,6 +8,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Upload } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import * as THREE from 'three';
+import { configureGlbRendererSupport } from '../../engine/glbAssetRegistry';
 import { runtimeBusClient } from '../../engine/runtimeBusClient';
 import type { ComponentDefinition, Vector3Tuple } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
@@ -31,6 +32,7 @@ function DropRaycasterBridge({
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
 
   useEffect(() => {
+    configureGlbRendererSupport(gl);
     bridgeRef.current = (clientX: number, clientY: number): Vector3Tuple => {
       const rect = gl.domElement.getBoundingClientRect();
       const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
