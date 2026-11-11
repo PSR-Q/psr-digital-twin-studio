@@ -1278,6 +1278,11 @@ body,
   color: var(--vc-emerald);
 }
 
+.vc-role-chip.role-VacuumGripper {
+  background: hsla(266, 85%, 64%, 0.18);
+  color: hsl(266, 92%, 78%);
+}
+
 .vc-sig-chip {
   flex-shrink: 0;
   font-size: 10px;
@@ -1433,14 +1438,18 @@ body,
   background: var(--vc-bg-input);
 }
 
+.vc-role-segmented.vc-five-seg {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .vc-role-seg-btn {
   height: 24px;
-  padding: 0 4px;
+  padding: 0 3px;
   border: none;
   border-radius: 3px;
   background: transparent;
   color: var(--vc-text-muted);
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 600;
   cursor: pointer;
   transition: all 110ms ease;
@@ -1469,6 +1478,11 @@ body,
 .vc-role-seg-btn.active.role-VisualEffect {
   background: var(--vc-emerald-dim);
   color: var(--vc-emerald);
+}
+
+.vc-role-seg-btn.active.role-VacuumGripper {
+  background: hsla(266, 85%, 64%, 0.22);
+  color: hsl(266, 92%, 78%);
 }
 
 .vc-yaw-chip.active {

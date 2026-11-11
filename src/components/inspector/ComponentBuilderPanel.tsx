@@ -3,6 +3,7 @@ import {
   Cpu,
   Crosshair,
   Layers,
+  Magnet,
   RotateCcw,
   Sparkles,
   Wrench,
@@ -15,6 +16,7 @@ import type {
   RotaryAxisRole,
   SceneNodeInstance,
   SubMeshRoleAssignment,
+  VacuumGripperRole,
   Vector3Tuple,
   VisualEffectRole,
 } from '../../shared/schemas';
@@ -45,6 +47,7 @@ function isSameVec(a: Vector3Tuple, b: Vector3Tuple): boolean {
 function shortRoleBadge(role: SubMeshRoleAssignment['role']): string {
   if (role === 'LinearAxis') return 'Linear';
   if (role === 'RotaryAxis') return 'Rotary';
+  if (role === 'VacuumGripper') return 'Gripper';
   if (role === 'VisualEffect') return 'Effect';
   return 'Static';
 }
@@ -152,6 +155,29 @@ export function ComponentBuilderPanel({
       return;
     }
 
+    if (targetRole === 'VacuumGripper') {
+      const verticalAxisParent = Object.values(component.nodeRoles).find(
+        (r) =>
+          r.nodeName !== activeNodeName &&
+          r.role === 'LinearAxis' &&
+          Math.abs(r.axis[1]) > 0.7
+      );
+      const fallbackAxisParent = Object.values(component.nodeRoles).find(
+        (r) => r.nodeName !== activeNodeName && r.role === 'LinearAxis'
+      );
+      const nextGripper: VacuumGripperRole = {
+        role: 'VacuumGripper',
+        nodeName: activeNodeName,
+        parentNodeName:
+          verticalAxisParent?.nodeName ?? fallbackAxisParent?.nodeName,
+        grabRadiusMm: 180,
+        grabHeightToleranceMm: 45,
+        placeTargetPosMm: 800,
+      };
+      setSubMeshRole(component.id, activeNodeName, nextGripper);
+      return;
+    }
+
     if (targetRole === 'VisualEffect') {
       const likelyLamp = /lamp|led|beacon|light|indicator|reed/i.test(activeNodeName);
       const nextVfx: VisualEffectRole = {
@@ -178,6 +204,14 @@ export function ComponentBuilderPanel({
 
   const updateRotaryPatch = (patch: Partial<RotaryAxisRole>) => {
     if (!activeNodeName || activeAssignment?.role !== 'RotaryAxis') return;
+    setSubMeshRole(component.id, activeNodeName, {
+      ...activeAssignment,
+      ...patch,
+    });
+  };
+
+  const updateGripperPatch = (patch: Partial<VacuumGripperRole>) => {
+    if (!activeNodeName || activeAssignment?.role !== 'VacuumGripper') return;
     setSubMeshRole(component.id, activeNodeName, {
       ...activeAssignment,
       ...patch,
@@ -262,13 +296,18 @@ export function ComponentBuilderPanel({
             </span>
           </div>
 
-          {/* 4-Way Role Type Selector */}
-          <div className="vc-role-segmented" role="group" aria-label="Sub-Mesh Role">
+          {/* 5-Way Role Type Selector */}
+          <div
+            className="vc-role-segmented vc-five-seg"
+            role="group"
+            aria-label="Sub-Mesh Role"
+          >
             {(
               [
                 ['StaticMesh', 'Static'],
                 ['LinearAxis', 'Linear'],
                 ['RotaryAxis', 'Rotary'],
+                ['VacuumGripper', 'Gripper'],
                 ['VisualEffect', 'Effect'],
               ] as const
             ).map(([roleKey, label]) => (
@@ -867,6 +906,109 @@ export function ComponentBuilderPanel({
             </div>
           )}
 
+          {/* VACUUM GRIPPER EDITOR */}
+          {activeAssignment.role === 'VacuumGripper' && (
+            <div className="vc-joint-form">
+              <div className="vc-vec3-block">
+                <span className="vc-vec3-title">
+                  <Magnet size={11} style={{ display: 'inline', marginRight: 4 }} />
+                  Suction Capture & Transfer Parameters (mm)
+                </span>
+                <div className="vc-vec3-grid">
+                  <label
+                    className="vc-axis-input-wrap"
+                    title="Horizontal Suction Grab Radius (mm)"
+                  >
+                    <span className="vc-axis-badge">RAD</span>
+                    <input
+                      id="input-gripper-radius-mm"
+                      type="number"
+                      step={10}
+                      min={20}
+                      value={activeAssignment.grabRadiusMm}
+                      onChange={(e) =>
+                        updateGripperPatch({
+                          grabRadiusMm: Math.max(
+                            20,
+                            Number(e.target.value) || 180
+                          ),
+                        })
+                      }
+                    />
+                  </label>
+                  <label
+                    className="vc-axis-input-wrap"
+                    title="Vertical Suction Contact Tolerance (mm)"
+                  >
+                    <span className="vc-axis-badge">TOL</span>
+                    <input
+                      id="input-gripper-tol-mm"
+                      type="number"
+                      step={5}
+                      min={5}
+                      value={activeAssignment.grabHeightToleranceMm}
+                      onChange={(e) =>
+                        updateGripperPatch({
+                          grabHeightToleranceMm: Math.max(
+                            5,
+                            Number(e.target.value) || 45
+                          ),
+                        })
+                      }
+                    />
+                  </label>
+                  <label
+                    className="vc-axis-input-wrap"
+                    title="Default Auto-Cycle Traverse Place Target (mm)"
+                  >
+                    <span className="vc-axis-badge">PLC</span>
+                    <input
+                      id="input-gripper-place-mm"
+                      type="number"
+                      step={50}
+                      value={activeAssignment.placeTargetPosMm ?? 800}
+                      onChange={(e) =>
+                        updateGripperPatch({
+                          placeTargetPosMm: Number(e.target.value) || 0,
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="vc-field-row">
+                <span>Carried By Axis:</span>
+                <select
+                  id="select-gripper-parent-axis"
+                  className="vc-compact-select"
+                  value={activeAssignment.parentNodeName ?? ''}
+                  onChange={(e) =>
+                    updateGripperPatch({
+                      parentNodeName: e.target.value || undefined,
+                    })
+                  }
+                >
+                  <option value="">(None · Machine Base)</option>
+                  {allNodeNames
+                    .filter((n) => n !== activeNodeName)
+                    .map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div className="vc-subtle-note">
+                Picks workpieces when <code>DO_VacuumOn</code> or{' '}
+                <code>DO_AutoCycle</code> is active, stops Z-cylinder compliantly on
+                part contact, carries in 6-DOF, and hands off onto target conveyor
+                splines.
+              </div>
+            </div>
+          )}
+
           {/* VISUAL EFFECT EDITOR */}
           {activeAssignment.role === 'VisualEffect' && (
             <div className="vc-joint-form">
@@ -1006,8 +1148,9 @@ export function ComponentBuilderPanel({
 
           {activeAssignment.role === 'StaticMesh' && (
             <div className="vc-subtle-note" style={{ marginTop: 8 }}>
-              Rigid structural sub-mesh. Switch to <strong>Linear</strong> or{' '}
-              <strong>Rotary</strong> above to synthesize PLC actuator & sensor signals.
+              Rigid structural sub-mesh. Switch to <strong>Linear</strong>,{' '}
+              <strong>Rotary</strong>, or <strong>Gripper</strong> above to synthesize
+              PLC actuator & sensor signals.
             </div>
           )}
         </div>
@@ -1033,8 +1176,9 @@ export function ComponentBuilderPanel({
 
         {nodeSignals.length === 0 ? (
           <div className="vc-subtle-note">
-            Assign a <strong>LinearAxis</strong>, <strong>RotaryAxis</strong>, or{' '}
-            <strong>VisualEffect</strong> role to generate controllable I/O tags.
+            Assign a <strong>LinearAxis</strong>, <strong>RotaryAxis</strong>,{' '}
+            <strong>VacuumGripper</strong>, or <strong>VisualEffect</strong> role to
+            generate controllable I/O tags.
           </div>
         ) : (
           <div className="vc-node-role-list">

@@ -310,6 +310,51 @@ export function synthesizeComponentSignals(
           defaultVal: 50,
         });
       }
+    } else if (assignment.role === 'VacuumGripper') {
+      const defaultPlaceMm = assignment.placeTargetPosMm ?? 800;
+      signals.push(
+        {
+          key: makeNodeSignalKey(nodeName, 'DO_AutoCycle'),
+          label: `${readable} · Auto Pick & Place`,
+          direction: 'PLC_TO_SIM',
+          dataType: 'BOOL',
+          nodeName,
+          defaultBool: false,
+        },
+        {
+          key: makeNodeSignalKey(nodeName, 'DO_VacuumOn'),
+          label: `${readable} · Vacuum Suction`,
+          direction: 'PLC_TO_SIM',
+          dataType: 'BOOL',
+          nodeName,
+          defaultBool: false,
+        },
+        {
+          key: makeNodeSignalKey(nodeName, 'AO_PlacePosMm'),
+          label: `${readable} · Place Target Pos`,
+          direction: 'PLC_TO_SIM',
+          dataType: 'FLOAT32',
+          nodeName,
+          unit: 'mm',
+          minVal: -400,
+          maxVal: 1200,
+          defaultVal: defaultPlaceMm,
+        },
+        {
+          key: makeNodeSignalKey(nodeName, 'DI_PartPresent'),
+          label: `${readable} · Part Under Pad`,
+          direction: 'SIM_TO_PLC',
+          dataType: 'BOOL',
+          nodeName,
+        },
+        {
+          key: makeNodeSignalKey(nodeName, 'DI_PartGripped'),
+          label: `${readable} · Vacuum Gripped OK`,
+          direction: 'SIM_TO_PLC',
+          dataType: 'BOOL',
+          nodeName,
+        }
+      );
     }
   }
 

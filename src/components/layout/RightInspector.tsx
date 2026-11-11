@@ -257,6 +257,148 @@ export function RightInspector() {
             </div>
           )}
 
+        {/* Quick Vacuum Pick & Transfer Control Card (shown whenever selected machine has VacuumGripper) */}
+        {selectedInstance &&
+          selectedComponent &&
+          inspectorTab !== 'signals' &&
+          inspectorTab !== 'plc' &&
+          Object.values(selectedComponent.nodeRoles)
+            .filter((r) => r.role === 'VacuumGripper')
+            .map((gripperRole) => {
+              const autoKey = `${gripperRole.nodeName}::DO_AutoCycle`;
+              const vacKey = `${gripperRole.nodeName}::DO_VacuumOn`;
+              const placeKey = `${gripperRole.nodeName}::AO_PlacePosMm`;
+              const autoBinding = bindings.find(
+                (b) =>
+                  b.instanceId === selectedInstance.id &&
+                  b.componentSignalKey === autoKey
+              );
+              const vacBinding = bindings.find(
+                (b) =>
+                  b.instanceId === selectedInstance.id &&
+                  b.componentSignalKey === vacKey
+              );
+              const placeBinding = bindings.find(
+                (b) =>
+                  b.instanceId === selectedInstance.id &&
+                  b.componentSignalKey === placeKey
+              );
+              const isAutoOn = Boolean(
+                autoBinding?.manualForceEnabled && autoBinding?.manualForceValue
+              );
+              const isVacOn = Boolean(
+                vacBinding?.manualForceEnabled && vacBinding?.manualForceValue
+              );
+              const placePosVal = Number(
+                placeBinding?.manualForceValue ?? gripperRole.placeTargetPosMm ?? 800
+              );
+
+              return (
+                <div
+                  key={gripperRole.nodeName}
+                  className="vc-inspector-card"
+                  style={{
+                    borderColor: isAutoOn
+                      ? 'hsla(160, 84%, 39%, 0.5)'
+                      : undefined,
+                  }}
+                >
+                  <div className="vc-section-header-row">
+                    <span className="vc-section-label">
+                      <Magnet size={12} className="vc-emerald-text" />
+                      <span>VACUUM PICK & TRANSFER</span>
+                    </span>
+                    <span
+                      className={`vc-role-chip ${
+                        isAutoOn ? 'role-VisualEffect' : 'role-VacuumGripper'
+                      }`}
+                    >
+                      {isAutoOn ? 'AUTO ON' : 'MANUAL / PLC'}
+                    </span>
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 1fr',
+                      gap: 6,
+                      marginBottom: 8,
+                    }}
+                  >
+                    <button
+                      id="btn-quick-gripper-autocycle"
+                      type="button"
+                      className={`vc-mini-action-btn ${isAutoOn ? 'vc-emerald' : ''}`}
+                      style={{
+                        justifyContent: 'center',
+                        padding: '6px 8px',
+                        fontWeight: 600,
+                      }}
+                      onClick={() => {
+                        if (!autoBinding) return;
+                        const next = !isAutoOn;
+                        useEditorStore
+                          .getState()
+                          .setSignalForce(autoBinding.id, next, next, next);
+                      }}
+                      title="Toggle built-in 9-step Auto Pick & Place Sequencer (DO_AutoCycle)"
+                    >
+                      <Zap size={11} />
+                      <span>{isAutoOn ? 'Auto Cycle: ON' : 'Auto Cycle: OFF'}</span>
+                    </button>
+
+                    <button
+                      id="btn-quick-gripper-vacuum"
+                      type="button"
+                      className={`vc-mini-action-btn ${isVacOn ? 'vc-amber' : ''}`}
+                      style={{
+                        justifyContent: 'center',
+                        padding: '6px 8px',
+                        fontWeight: 600,
+                      }}
+                      onClick={() => {
+                        if (!vacBinding) return;
+                        const next = !isVacOn;
+                        useEditorStore
+                          .getState()
+                          .setSignalForce(vacBinding.id, next, next, next);
+                      }}
+                      title="Manual Vacuum Suction Valve Override (DO_VacuumOn)"
+                    >
+                      <Magnet size={11} />
+                      <span>{isVacOn ? 'Suction: ON' : 'Suction: OFF'}</span>
+                    </button>
+                  </div>
+
+                  {placeBinding && (
+                    <div className="vc-field-row">
+                      <span>Place Lane Target (mm):</span>
+                      <input
+                        id="input-quick-place-pos-mm"
+                        type="number"
+                        step={50}
+                        value={placePosVal}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (Number.isNaN(v)) return;
+                          useEditorStore
+                            .getState()
+                            .setSignalForce(placeBinding.id, true, v, false);
+                        }}
+                        className="vc-small-num-input"
+                      />
+                    </div>
+                  )}
+
+                  <div className="vc-subtle-note" style={{ marginTop: 6 }}>
+                    {isAutoOn
+                      ? 'Auto-picks cartons from Pass Lane (Z=0), lifts & traverses +800 mm, and transfers onto Lane 2.'
+                      : 'Pass-through / PLC mode: cartons pass straight through unless PLC drives DO_Extend + DO_VacuumOn.'}
+                  </div>
+                </div>
+              );
+            })}
+
         {/* TAB 5: LIVE PLC DRIVERS & TAG CONSOLE */}
         {inspectorTab === 'plc' ? (
           <PlcDriverAndTagPanel />

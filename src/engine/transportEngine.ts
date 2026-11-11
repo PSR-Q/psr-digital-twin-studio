@@ -3,21 +3,32 @@ import {
   type BinaryIpcBufferView,
   type ComponentDefinition,
   type FlowItemState,
+  type LinearAxisRole,
   type PlcTagBinding,
+  type RotaryAxisRole,
   type SceneNodeInstance,
   type SimulationRunState,
+  type SubMeshRoleAssignment,
   type TransportGraph,
   type TransportPathNode,
   type UUID,
+  type VacuumGripperRole,
   type Vector3Tuple,
   type WorkpieceShapeType,
 } from '../shared/schemas';
+import {
+  getLiveGripperCompPose,
+  setLiveAutoAxisTargetMm,
+  setLiveAutoCylinderExtend,
+  setLiveAutoVacuumOn,
+  setLiveAxisDynamicMaxMm,
+} from './kinematicsEngine';
 import { makeNodeSignalKey } from './signalCatalogSync';
 import { eulerDegToQuaternion } from './snapEngine';
 
 /**
  * Deterministic 1D Spline Material Flow, Smooth Accumulation, Sub-Frame Sensor,
- * and Virtual HSC Encoder Engine (Milestone 3 — Zero React State Re-renders)
+ * Vacuum Gripper Pick & Transfer, and Virtual HSC Encoder Engine (Milestones 3 & 4 — Zero React Re-renders)
  *
  * Runs at 60–144Hz inside R3F `useFrame` (or deterministic headless test loops),
  * reading and writing directly to `BinaryIpcBufferView`.
@@ -83,6 +94,54 @@ interface BeltDriveLookup {
   fallbackRampedRpm: number;
 }
 
+type AutoPickPhase =
+  | 'WAIT_PART'
+  | 'LOWER_PICK'
+  | 'GRAB_DWELL'
+  | 'LIFT_PICK'
+  | 'TRAVERSE_PLACE'
+  | 'LOWER_PLACE'
+  | 'RELEASE_DWELL'
+  | 'LIFT_PLACE'
+  | 'RETURN_HOME';
+
+interface GripperRuntimeController {
+  key: string;
+  instanceId: UUID;
+  nodeName: string;
+  role: VacuumGripperRole;
+  chainRoles: Array<{
+    role: LinearAxisRole | RotaryAxisRole;
+    actualSlot: number;
+  }>;
+  doAutoCycleSlot: number;
+  doVacuumOnSlot: number;
+  aoPlacePosMmSlot: number;
+  diPartPresentSlot: number;
+  diPartGrippedSlot: number;
+  verticalAxisNodeName: string | null;
+  verticalAxisRole: LinearAxisRole | null;
+  verticalDoExtendSlot: number;
+  verticalDoRetractSlot: number;
+  verticalStrokeSlot: number;
+  verticalReedExtSlot: number;
+  verticalReedRetSlot: number;
+  traverseAxisNodeName: string | null;
+  traverseAxisRole: LinearAxisRole | null;
+  traverseAoTargetSlot: number;
+  traverseActualPosSlot: number;
+  traverseInPosSlot: number;
+  autoPhase: AutoPickPhase;
+  phaseTimerSec: number;
+  autoVacuumCmd: boolean;
+  wasAutoCycleActive: boolean;
+  grippedItemId: UUID | null;
+  gripRelQuat: THREE.Quaternion;
+  headlessTraversePosMm: number;
+  headlessTraverseVelMmS: number;
+  headlessVerticalPosMm: number;
+}
+
 const LUT_SAMPLES = 64;
 const ACCUMULATION_GAP_MM = 24;
 const STOPPER_CLEARANCE_MM = 8;
@@ -102,6 +161,51 @@ const _basisMat = new THREE.Matrix4();
 const _deckQuat = new THREE.Quaternion();
 const _tmpVecA = new THREE.Vector3();
 const _tmpVecB = new THREE.Vector3();
+const _gripPadWorldPos = new THREE.Vector3();
+const _gripHomeWorldPos = new THREE.Vector3();
+const _gripCompQuat = new THREE.Quaternion();
+const _gripPadWorldQuat = new THREE.Quaternion();
+const _gripItemPos = new THREE.Vector3();
+const _gripItemQuat = new THREE.Quaternion();
+const _gripComposedQuat = new THREE.Quaternion();
+const _gripAxisVec = new THREE.Vector3();
+const _gripRotQuat = new THREE.Quaternion();
+
+function stepHeadlessServo1D(
+  currentPos: number,
+  currentVel: number,
+  targetPos: number,
+  maxVel: number,
+  accel: number,
+  decel: number,
+  dt: number
+): { pos: number; vel: number } {
+  const error = targetPos - currentPos;
+  const dist = Math.abs(error);
+  if (dist < 0.04 && Math.abs(currentVel) < 1.5) {
+    return { pos: targetPos, vel: 0 };
+  }
+  const dir = error >= 0 ? 1 : -1;
+  const safeDecel = Math.max(10, decel);
+  const safeAccel = Math.max(10, accel);
+  const safeMaxVel = Math.max(5, maxVel);
+  const brakingSpeed = Math.sqrt(2 * safeDecel * dist);
+  const desiredVel = dir * Math.min(safeMaxVel, brakingSpeed);
+  const velDiff = desiredVel - currentVel;
+  const isBraking =
+    currentVel * dir < 0 || Math.abs(desiredVel) < Math.abs(currentVel);
+  const maxDeltaV = (isBraking ? safeDecel : safeAccel) * dt;
+  let nextVel =
+    Math.abs(velDiff) <= maxDeltaV
+      ? desiredVel
+      : currentVel + Math.sign(velDiff) * maxDeltaV;
+  let nextPos = currentPos + nextVel * dt;
+  if ((targetPos - currentPos) * (targetPos - nextPos) < 0) {
+    nextPos = targetPos;
+    nextVel = 0;
+  }
+  return { pos: nextPos, vel: nextVel };
+}
 
 function applySignedModulo(val: number, modulo: number): number {
   const safeMod = Math.max(100, Math.floor(Math.abs(modulo) || 1_000_000));
@@ -416,6 +520,7 @@ export class TransportRuntimeEngine {
   private beltDriveMap = new Map<UUID, BeltDriveLookup>();
   private axisLookupMap = new Map<string, AxisFeedbackLookup>();
   private turntableAngleSlotByInst = new Map<UUID, number>();
+  private gripperControllers = new Map<string, GripperRuntimeController>();
 
   private activeDraggedWorkpiece: DraggedWorkpieceDescriptor | null = null;
   private dragPreviewHit: BeltDropHitResult | null = null;
@@ -471,6 +576,35 @@ export class TransportRuntimeEngine {
     this.beltTravelAccumMm.clear();
     this.axisPrevPos.clear();
     this.axisSmoothVel.clear();
+
+    for (const ctrl of this.gripperControllers.values()) {
+      ctrl.grippedItemId = null;
+      ctrl.autoPhase = 'WAIT_PART';
+      ctrl.phaseTimerSec = 0;
+      ctrl.autoVacuumCmd = false;
+      ctrl.wasAutoCycleActive = false;
+      ctrl.headlessTraversePosMm = ctrl.traverseAxisRole?.initialPosMm ?? 0;
+      ctrl.headlessTraverseVelMmS = 0;
+      ctrl.headlessVerticalPosMm = ctrl.verticalAxisRole?.initialPosMm ?? 0;
+
+      if (ctrl.verticalAxisNodeName) {
+        setLiveAxisDynamicMaxMm(ctrl.instanceId, ctrl.verticalAxisNodeName, null);
+        setLiveAutoCylinderExtend(ctrl.instanceId, ctrl.verticalAxisNodeName, null);
+      }
+      if (ctrl.traverseAxisNodeName) {
+        setLiveAutoAxisTargetMm(ctrl.instanceId, ctrl.traverseAxisNodeName, null);
+      }
+      setLiveAutoVacuumOn(ctrl.instanceId, ctrl.nodeName, null);
+
+      if (bufferView) {
+        if (ctrl.diPartPresentSlot >= 0) {
+          bufferView.writeSimToPlcBool(ctrl.diPartPresentSlot, false);
+        }
+        if (ctrl.diPartGrippedSlot >= 0) {
+          bufferView.writeSimToPlcBool(ctrl.diPartGrippedSlot, false);
+        }
+      }
+    }
 
     if (bufferView && graph) {
       for (const s of graph.sensors) {
@@ -536,6 +670,7 @@ export class TransportRuntimeEngine {
 
     // Check entry clearance so manual clicks never overlap an existing box
     for (const existing of this.items) {
+      if (existing.grippedByKey || existing.worldPoseOverride) continue;
       if (existing.pathNodeId !== targetPathNodeId) continue;
       const minAllowed = spawnPosMm + halfLen + existing.dimensionsMm[0] * 0.5 + ACCUMULATION_GAP_MM;
       if (existing.distanceMm < minAllowed) {
@@ -766,6 +901,7 @@ export class TransportRuntimeEngine {
 
     const isClearAt = (candMm: number): boolean => {
       for (const existing of this.items) {
+        if (existing.grippedByKey || existing.worldPoseOverride) continue;
         if (existing.pathNodeId !== pathNodeId) continue;
         const reqSpacing =
           halfLen + existing.dimensionsMm[0] * 0.5 + ACCUMULATION_GAP_MM * 0.85;
@@ -831,6 +967,7 @@ export class TransportRuntimeEngine {
       let triggered = false;
       for (let i = 0; i < this.items.length; i++) {
         const it = this.items[i];
+        if (it.grippedByKey || it.worldPoseOverride) continue;
         if (it.pathNodeId !== sensor.pathNodeId) continue;
         const halfBox = it.dimensionsMm[0] * 0.5;
         const sweptRear = Math.min(it.prevDistanceMm, it.distanceMm) - halfBox;
@@ -862,30 +999,31 @@ export class TransportRuntimeEngine {
     this.beltDriveMap.clear();
     this.axisLookupMap.clear();
     this.turntableAngleSlotByInst.clear();
+    const prevGrippers = new Map(this.gripperControllers);
+    this.gripperControllers.clear();
 
     const compMap = new Map(componentLibrary.map((c) => [c.id, c]));
     const slotMap = new Map<string, number>();
     for (const b of bindings) {
       slotMap.set(`${b.instanceId}::${b.componentSignalKey}`, b.bufferSlotIndex);
     }
+    const slotOf = (instId: UUID, nodeName: string, suffix: string): number =>
+      slotMap.get(`${instId}::${makeNodeSignalKey(nodeName, suffix)}`) ?? -1;
 
     for (const inst of instances) {
       const comp = compMap.get(inst.componentId);
       if (!comp) continue;
 
-      for (const role of Object.values(comp.nodeRoles)) {
+      const allCompRoles = Object.values(comp.nodeRoles);
+      const hasVacuumGripperOnComp = allCompRoles.some(
+        (r) => r.role === 'VacuumGripper'
+      );
+
+      for (const role of allCompRoles) {
         if (role.role === 'VisualEffect' && role.effectType === 'uv-scroll') {
-          const runBitSlot =
-            slotMap.get(`${inst.id}::${makeNodeSignalKey(role.nodeName, 'DO_BeltRun')}`) ??
-            -1;
-          const actualRpmSlot =
-            slotMap.get(
-              `${inst.id}::${makeNodeSignalKey(role.nodeName, 'AI_ActualBeltRpm')}`
-            ) ?? -1;
-          const cmdRpmSlot =
-            slotMap.get(
-              `${inst.id}::${makeNodeSignalKey(role.nodeName, 'AO_BeltSpeedRpm')}`
-            ) ?? -1;
+          const runBitSlot = slotOf(inst.id, role.nodeName, 'DO_BeltRun');
+          const actualRpmSlot = slotOf(inst.id, role.nodeName, 'AI_ActualBeltRpm');
+          const cmdRpmSlot = slotOf(inst.id, role.nodeName, 'AO_BeltSpeedRpm');
 
           this.beltDriveMap.set(inst.id, {
             runBitSlot,
@@ -896,37 +1034,27 @@ export class TransportRuntimeEngine {
           });
         } else if (role.role === 'LinearAxis') {
           const isServo = role.behavior?.presetType === 'ServoPositioning';
-          const posRealSlot =
-            slotMap.get(
-              `${inst.id}::${makeNodeSignalKey(
-                role.nodeName,
-                isServo ? 'AI_ActualPosMm' : 'AI_StrokeMm'
-              )}`
-            ) ?? -1;
-          const reedExtBoolSlot =
-            slotMap.get(
-              `${inst.id}::${makeNodeSignalKey(role.nodeName, 'DI_ReedExtended')}`
-            ) ?? -1;
-          const doExtBoolSlot =
-            slotMap.get(
-              `${inst.id}::${makeNodeSignalKey(role.nodeName, 'DO_Extend')}`
-            ) ?? -1;
+          const posRealSlot = slotOf(
+            inst.id,
+            role.nodeName,
+            isServo ? 'AI_ActualPosMm' : 'AI_StrokeMm'
+          );
+          const reedExtBoolSlot = slotOf(inst.id, role.nodeName, 'DI_ReedExtended');
+          const doExtBoolSlot = slotOf(inst.id, role.nodeName, 'DO_Extend');
 
           this.axisLookupMap.set(`${inst.id}::${role.nodeName}`, {
             posRealSlot,
             reedExtBoolSlot,
             doExtBoolSlot,
             minLimitMm: Math.min(role.minLimitMm, role.maxLimitMm),
-            isPneumaticStopper: !isServo,
+            isPneumaticStopper: !isServo && !hasVacuumGripperOnComp,
           });
         } else if (role.role === 'RotaryAxis') {
-          const angleSlot =
-            slotMap.get(
-              `${inst.id}::${makeNodeSignalKey(
-                role.nodeName,
-                role.mode === 'continuous' ? 'AI_ActualRpm' : 'AI_ActualAngleDeg'
-              )}`
-            ) ?? -1;
+          const angleSlot = slotOf(
+            inst.id,
+            role.nodeName,
+            role.mode === 'continuous' ? 'AI_ActualRpm' : 'AI_ActualAngleDeg'
+          );
           this.axisLookupMap.set(`${inst.id}::${role.nodeName}`, {
             posRealSlot: angleSlot,
             reedExtBoolSlot: -1,
@@ -942,6 +1070,121 @@ export class TransportRuntimeEngine {
           ) {
             this.turntableAngleSlotByInst.set(inst.id, angleSlot);
           }
+        } else if (role.role === 'VacuumGripper') {
+          const chainOrdered: Array<{
+            role: LinearAxisRole | RotaryAxisRole;
+            actualSlot: number;
+          }> = [];
+          const visitedAnc = new Set<string>();
+          let cursorName: string | undefined = role.parentNodeName;
+          while (cursorName && !visitedAnc.has(cursorName)) {
+            visitedAnc.add(cursorName);
+            const anc: SubMeshRoleAssignment | undefined = comp.nodeRoles[cursorName];
+            if (!anc) break;
+            if (anc.role === 'LinearAxis') {
+              const isServo = anc.behavior?.presetType === 'ServoPositioning';
+              chainOrdered.unshift({
+                role: anc,
+                actualSlot: slotOf(
+                  inst.id,
+                  anc.nodeName,
+                  isServo ? 'AI_ActualPosMm' : 'AI_StrokeMm'
+                ),
+              });
+              cursorName = anc.parentNodeName;
+            } else if (anc.role === 'RotaryAxis') {
+              chainOrdered.unshift({
+                role: anc,
+                actualSlot: slotOf(
+                  inst.id,
+                  anc.nodeName,
+                  anc.mode === 'continuous' ? 'AI_ActualRpm' : 'AI_ActualAngleDeg'
+                ),
+              });
+              cursorName = anc.parentNodeName;
+            } else {
+              break;
+            }
+          }
+
+          let verticalRole: LinearAxisRole | null = null;
+          let traverseRole: LinearAxisRole | null = null;
+
+          for (const entry of chainOrdered) {
+            if (entry.role.role === 'LinearAxis') {
+              if (Math.abs(entry.role.axis[1]) > 0.65 && !verticalRole) {
+                verticalRole = entry.role;
+              } else if (Math.abs(entry.role.axis[1]) <= 0.65 && !traverseRole) {
+                traverseRole = entry.role;
+              }
+            }
+          }
+          if (!verticalRole || !traverseRole) {
+            for (const cand of allCompRoles) {
+              if (cand.role !== 'LinearAxis') continue;
+              if (Math.abs(cand.axis[1]) > 0.65 && !verticalRole) {
+                verticalRole = cand;
+              } else if (Math.abs(cand.axis[1]) <= 0.65 && !traverseRole) {
+                traverseRole = cand;
+              }
+            }
+          }
+
+          const gKey = `${inst.id}::${role.nodeName}`;
+          const prevCtrl = prevGrippers.get(gKey);
+          const vNode = verticalRole?.nodeName ?? null;
+          const tNode = traverseRole?.nodeName ?? null;
+          const vIsServo = verticalRole?.behavior?.presetType === 'ServoPositioning';
+
+          this.gripperControllers.set(gKey, {
+            key: gKey,
+            instanceId: inst.id,
+            nodeName: role.nodeName,
+            role,
+            chainRoles: chainOrdered,
+            doAutoCycleSlot: slotOf(inst.id, role.nodeName, 'DO_AutoCycle'),
+            doVacuumOnSlot: slotOf(inst.id, role.nodeName, 'DO_VacuumOn'),
+            aoPlacePosMmSlot: slotOf(inst.id, role.nodeName, 'AO_PlacePosMm'),
+            diPartPresentSlot: slotOf(inst.id, role.nodeName, 'DI_PartPresent'),
+            diPartGrippedSlot: slotOf(inst.id, role.nodeName, 'DI_PartGripped'),
+            verticalAxisNodeName: vNode,
+            verticalAxisRole: verticalRole,
+            verticalDoExtendSlot: vNode ? slotOf(inst.id, vNode, 'DO_Extend') : -1,
+            verticalDoRetractSlot: vNode ? slotOf(inst.id, vNode, 'DO_Retract') : -1,
+            verticalStrokeSlot: vNode
+              ? slotOf(inst.id, vNode, vIsServo ? 'AI_ActualPosMm' : 'AI_StrokeMm')
+              : -1,
+            verticalReedExtSlot: vNode ? slotOf(inst.id, vNode, 'DI_ReedExtended') : -1,
+            verticalReedRetSlot: vNode
+              ? slotOf(inst.id, vNode, 'DI_ReedRetracted')
+              : -1,
+            traverseAxisNodeName: tNode,
+            traverseAxisRole: traverseRole,
+            traverseAoTargetSlot: tNode
+              ? slotOf(inst.id, tNode, 'AO_TargetPosMm')
+              : -1,
+            traverseActualPosSlot: tNode
+              ? slotOf(
+                  inst.id,
+                  tNode,
+                  traverseRole?.behavior?.presetType === 'ServoPositioning'
+                    ? 'AI_ActualPosMm'
+                    : 'AI_StrokeMm'
+                )
+              : -1,
+            traverseInPosSlot: tNode ? slotOf(inst.id, tNode, 'DI_InPosition') : -1,
+            autoPhase: prevCtrl?.autoPhase ?? 'WAIT_PART',
+            phaseTimerSec: prevCtrl?.phaseTimerSec ?? 0,
+            autoVacuumCmd: prevCtrl?.autoVacuumCmd ?? false,
+            wasAutoCycleActive: prevCtrl?.wasAutoCycleActive ?? false,
+            grippedItemId: prevCtrl?.grippedItemId ?? null,
+            gripRelQuat: prevCtrl?.gripRelQuat ?? new THREE.Quaternion(),
+            headlessTraversePosMm:
+              prevCtrl?.headlessTraversePosMm ?? (traverseRole?.initialPosMm ?? 0),
+            headlessTraverseVelMmS: prevCtrl?.headlessTraverseVelMmS ?? 0,
+            headlessVerticalPosMm:
+              prevCtrl?.headlessVerticalPosMm ?? (verticalRole?.initialPosMm ?? 0),
+          });
         }
       }
     }
@@ -1149,6 +1392,17 @@ export class TransportRuntimeEngine {
       }
     }
 
+    // 4b. Step 3D Vacuum Grippers, Auto Pick & Place Sequencers & Pick-Zone Centering Stops
+    if (this.gripperControllers.size > 0) {
+      this.stepVacuumGrippers(
+        instMap,
+        allNodes,
+        pushBarrier,
+        bufferView,
+        dt
+      );
+    }
+
     // 5. Step Part Spawners (`PartSource` — ON/OFF gated interval auto-feed + PLC rising-edge trigger)
     for (const spawner of graph.spawners) {
       const maxAllowed = spawner.maxActiveItems ?? 45;
@@ -1206,7 +1460,12 @@ export class TransportRuntimeEngine {
     }
 
     const itemsByNode = new Map<UUID, RuntimeFlowItem[]>();
+    const detachedItems: RuntimeFlowItem[] = [];
     for (const item of this.items) {
+      if (item.grippedByKey || item.worldPoseOverride) {
+        detachedItems.push(item);
+        continue;
+      }
       item.prevDistanceMm = item.distanceMm;
       let list = itemsByNode.get(item.pathNodeId);
       if (!list) {
@@ -1389,6 +1648,10 @@ export class TransportRuntimeEngine {
       }
     }
 
+    for (let d = 0; d < detachedItems.length; d++) {
+      survivingItems.push(detachedItems[d]);
+    }
+
     this.items = survivingItems;
 
     // Write Sink DINT32 counters
@@ -1481,6 +1744,738 @@ export class TransportRuntimeEngine {
       }
       if (enc.actualVelocityRealSlot >= 0) {
         bufferView.writeFloat32(enc.actualVelocityRealSlot, smoothVel);
+      }
+    }
+  }
+
+  private computeAnalyticalGripperWorldPose(
+    ctrl: GripperRuntimeController,
+    inst: SceneNodeInstance,
+    bufferView: BinaryIpcBufferView,
+    useHeadlessFallbackPos: boolean,
+    outPadWorldPos: THREE.Vector3,
+    outPadWorldQuat: THREE.Quaternion
+  ): number {
+    const restBottomY = ctrl.role.localBottomOffsetM ?? 1.095;
+    outPadWorldPos.set(0, restBottomY, 0);
+    _gripCompQuat.identity();
+
+    for (let i = ctrl.chainRoles.length - 1; i >= 0; i--) {
+      // Apply local-to-root or root-to-local: translations commute, rotations wrap inner child
+      const entry = ctrl.chainRoles[i];
+      const r = entry.role;
+      if (r.role === 'LinearAxis') {
+        let posMm = r.initialPosMm;
+        if (useHeadlessFallbackPos) {
+          if (r.nodeName === ctrl.traverseAxisNodeName) {
+            posMm = ctrl.headlessTraversePosMm;
+          } else if (r.nodeName === ctrl.verticalAxisNodeName) {
+            posMm = ctrl.headlessVerticalPosMm;
+          } else if (entry.actualSlot >= 0) {
+            posMm = bufferView.readFloat32(entry.actualSlot);
+          }
+        } else if (entry.actualSlot >= 0) {
+          posMm = bufferView.readFloat32(entry.actualSlot);
+        }
+
+        _gripAxisVec.set(r.axis[0], r.axis[1], r.axis[2]);
+        if (_gripAxisVec.lengthSq() > 1e-8) {
+          _gripAxisVec.normalize().multiplyScalar(posMm * 0.001);
+          outPadWorldPos.add(_gripAxisVec);
+        }
+      } else if (r.role === 'RotaryAxis' && r.mode === 'bounded') {
+        const deg =
+          entry.actualSlot >= 0 ? bufferView.readFloat32(entry.actualSlot) : 0;
+        _gripAxisVec.set(r.axis[0], r.axis[1], r.axis[2]);
+        if (_gripAxisVec.lengthSq() > 1e-8) {
+          _gripAxisVec.normalize();
+          _gripRotQuat.setFromAxisAngle(_gripAxisVec, deg * DEG2RAD);
+          outPadWorldPos.applyQuaternion(_gripRotQuat);
+          _gripCompQuat.premultiply(_gripRotQuat);
+        }
+      }
+    }
+
+    const instQuat = eulerDegToQuaternion(inst.transform.rotationDeg);
+    const [sx, sy, sz] = inst.transform.scale;
+    const [px, py, pz] = inst.transform.position;
+
+    outPadWorldPos.set(
+      outPadWorldPos.x * sx,
+      outPadWorldPos.y * sy,
+      outPadWorldPos.z * sz
+    );
+    outPadWorldPos.applyQuaternion(instQuat);
+    outPadWorldPos.set(
+      outPadWorldPos.x + px,
+      outPadWorldPos.y + py,
+      outPadWorldPos.z + pz
+    );
+
+    outPadWorldQuat.copy(instQuat).multiply(_gripCompQuat);
+    return py + restBottomY * sy;
+  }
+
+  private stepVacuumGrippers(
+    instMap: Map<UUID, SceneNodeInstance>,
+    allNodes: TransportPathNode[],
+    pushBarrier: (nodeId: UUID, offsetMm: number) => void,
+    bufferView: BinaryIpcBufferView,
+    dt: number
+  ): void {
+    for (const ctrl of this.gripperControllers.values()) {
+      const inst = instMap.get(ctrl.instanceId);
+      if (!inst || !inst.visible) continue;
+
+      const livePose = getLiveGripperCompPose(ctrl.instanceId, ctrl.nodeName);
+      const isHeadless = livePose === undefined;
+      const instQuat = eulerDegToQuaternion(inst.transform.rotationDeg);
+      const [sx, sy, sz] = inst.transform.scale;
+      const [px, py, pz] = inst.transform.position;
+
+      const restBottomCompY =
+        livePose?.restBottomYComp ?? ctrl.role.localBottomOffsetM ?? 1.095;
+      const worldRestPadY = py + restBottomCompY * sy;
+
+      // 1. Project Home Pick Station onto conveyor splines so AutoCycle centers incoming workpieces cleanly
+      const autoCycleOn =
+        ctrl.doAutoCycleSlot >= 0 && bufferView.readPlcToSimBool(ctrl.doAutoCycleSlot);
+
+      if (autoCycleOn) {
+        _gripHomeWorldPos.set(0, restBottomCompY * sy, 0);
+        if (ctrl.traverseAxisRole) {
+          const homeMm = ctrl.traverseAxisRole.initialPosMm;
+          _gripAxisVec.set(...ctrl.traverseAxisRole.axis);
+          if (_gripAxisVec.lengthSq() > 1e-8) {
+            _gripAxisVec.normalize().multiplyScalar(homeMm * 0.001);
+            _gripHomeWorldPos.x += _gripAxisVec.x * sx;
+            _gripHomeWorldPos.y += _gripAxisVec.y * sy;
+            _gripHomeWorldPos.z += _gripAxisVec.z * sz;
+          }
+        }
+        _gripHomeWorldPos.applyQuaternion(instQuat);
+        _gripHomeWorldPos.set(
+          _gripHomeWorldPos.x + px,
+          _gripHomeWorldPos.y + py,
+          _gripHomeWorldPos.z + pz
+        );
+
+        let bestPickNode: TransportPathNode | null = null;
+        let bestPickDistMm = 0;
+        let bestPickLat = Infinity;
+        for (const candNode of allNodes) {
+          const lut = this.samplerCache.get(candNode.id)?.table;
+          if (!lut) continue;
+          const proj = projectPointToPathDistanceMm(lut, _gripHomeWorldPos);
+          if (proj.lateralDistMeters <= 0.34 && proj.lateralDistMeters < bestPickLat) {
+            bestPickLat = proj.lateralDistMeters;
+            bestPickNode = candNode;
+            bestPickDistMm = proj.distanceMm;
+          }
+        }
+
+        if (bestPickNode) {
+          // Center the leading non-gripped workpiece right under the suction cups at bestPickDistMm
+          let leadItem: RuntimeFlowItem | null = null;
+          for (let i = 0; i < this.items.length; i++) {
+            const it = this.items[i];
+            if (it.grippedByKey || it.worldPoseOverride) continue;
+            if (it.pathNodeId !== bestPickNode.id) continue;
+            if (it.distanceMm <= bestPickDistMm + 36) {
+              if (!leadItem || it.distanceMm > leadItem.distanceMm) {
+                leadItem = it;
+              }
+            }
+          }
+          const refHalfLen = leadItem ? leadItem.dimensionsMm[0] * 0.5 : 140;
+          pushBarrier(
+            bestPickNode.id,
+            bestPickDistMm + refHalfLen + STOPPER_CLEARANCE_MM
+          );
+        }
+      }
+
+      // 2. Compute current world suction pad bottom pose
+      if (livePose) {
+        _gripPadWorldPos.set(
+          livePose.padBottomComp[0] * sx,
+          livePose.padBottomComp[1] * sy,
+          livePose.padBottomComp[2] * sz
+        );
+        _gripPadWorldPos.applyQuaternion(instQuat);
+        _gripPadWorldPos.set(
+          _gripPadWorldPos.x + px,
+          _gripPadWorldPos.y + py,
+          _gripPadWorldPos.z + pz
+        );
+        _gripCompQuat.set(
+          livePose.quatComp[0],
+          livePose.quatComp[1],
+          livePose.quatComp[2],
+          livePose.quatComp[3]
+        );
+        _gripPadWorldQuat.copy(instQuat).multiply(_gripCompQuat);
+      } else {
+        this.computeAnalyticalGripperWorldPose(
+          ctrl,
+          inst,
+          bufferView,
+          true,
+          _gripPadWorldPos,
+          _gripPadWorldQuat
+        );
+      }
+
+      // 3. Resolve currently gripped item (if any) & closest free workpiece underneath pad
+      let grippedItem: RuntimeFlowItem | null = null;
+      if (ctrl.grippedItemId) {
+        grippedItem =
+          this.items.find((it) => it.id === ctrl.grippedItemId) ?? null;
+        if (!grippedItem) {
+          ctrl.grippedItemId = null;
+        }
+      }
+
+      const grabRadiusM = Math.max(0.04, ctrl.role.grabRadiusMm * 0.001);
+      const grabTolM = Math.max(0.012, ctrl.role.grabHeightToleranceMm * 0.001);
+
+      let candidatePickItem: RuntimeFlowItem | null = null;
+      let candidateHorizDistM = Infinity;
+      let candidateTopY = 0;
+
+      for (let i = 0; i < this.items.length; i++) {
+        const it = this.items[i];
+        if (it.grippedByKey) continue;
+
+        const hgtM = Math.max(0.03, it.dimensionsMm[2] * 0.001);
+        let ix = 0;
+        let iz = 0;
+        let topY = 0;
+
+        if (it.worldPoseOverride) {
+          ix = it.worldPoseOverride.position[0];
+          topY = it.worldPoseOverride.position[1] + hgtM * 0.5;
+          iz = it.worldPoseOverride.position[2];
+        } else {
+          const lut = this.samplerCache.get(it.pathNodeId)?.table;
+          if (!lut) continue;
+          sampleWorldPathPose(lut, it.distanceMm, _gripItemPos, _gripItemQuat);
+          ix = _gripItemPos.x;
+          topY = _gripItemPos.y + hgtM + 0.004;
+          iz = _gripItemPos.z;
+        }
+
+        const dx = _gripPadWorldPos.x - ix;
+        const dz = _gripPadWorldPos.z - iz;
+        const hDist = Math.sqrt(dx * dx + dz * dz);
+        if (hDist <= grabRadiusM && hDist < candidateHorizDistM) {
+          candidateHorizDistM = hDist;
+          candidatePickItem = it;
+          candidateTopY = topY;
+        }
+      }
+
+      // Check conveyor spline directly under current pad [x, z]
+      let underBeltNode: TransportPathNode | null = null;
+      let underBeltDistMm = 0;
+      let underBeltSurfaceY: number | null = null;
+      let bestUnderBeltLat = Infinity;
+      for (const candNode of allNodes) {
+        const lut = this.samplerCache.get(candNode.id)?.table;
+        if (!lut) continue;
+        const proj = projectPointToPathDistanceMm(lut, _gripPadWorldPos);
+        if (proj.lateralDistMeters <= 0.34 && proj.lateralDistMeters < bestUnderBeltLat) {
+          bestUnderBeltLat = proj.lateralDistMeters;
+          underBeltNode = candNode;
+          underBeltDistMm = proj.distanceMm;
+          sampleWorldPathPose(lut, proj.distanceMm, _tmpVecA);
+          underBeltSurfaceY = _tmpVecA.y + 0.004;
+        }
+      }
+
+      // 4. Publish compliant downward stroke clamp so suction cups kiss box top / belt cleanly without clipping
+      let dynMaxStrokeMm: number | null = null;
+      if (
+        ctrl.verticalAxisRole &&
+        ctrl.verticalAxisNodeName &&
+        ctrl.verticalAxisRole.axis[1] < -0.5
+      ) {
+        const vMax = Math.max(
+          ctrl.verticalAxisRole.minLimitMm,
+          ctrl.verticalAxisRole.maxLimitMm
+        );
+        if (grippedItem) {
+          const gHgtM = Math.max(0.03, grippedItem.dimensionsMm[2] * 0.001);
+          const stopSurfaceY = underBeltSurfaceY ?? 0.004;
+          dynMaxStrokeMm = Math.min(
+            vMax,
+            Math.max(0, (worldRestPadY - (stopSurfaceY + gHgtM)) * 1000)
+          );
+        } else if (candidatePickItem) {
+          dynMaxStrokeMm = Math.min(
+            vMax,
+            Math.max(0, (worldRestPadY - candidateTopY) * 1000)
+          );
+        } else if (underBeltSurfaceY !== null) {
+          dynMaxStrokeMm = Math.min(
+            vMax,
+            Math.max(0, (worldRestPadY - (underBeltSurfaceY + 0.018)) * 1000)
+          );
+        }
+        setLiveAxisDynamicMaxMm(
+          ctrl.instanceId,
+          ctrl.verticalAxisNodeName,
+          dynMaxStrokeMm
+        );
+      }
+
+      // 5. Step Built-in Smart `DO_AutoCycle` Pick & Transfer Sequencer
+      const homeTraverseMm = ctrl.traverseAxisRole?.initialPosMm ?? 0;
+      const defaultPlaceMm = ctrl.role.placeTargetPosMm ?? 800;
+      let placeTargetMm = defaultPlaceMm;
+      if (ctrl.aoPlacePosMmSlot >= 0) {
+        const rawPlace = bufferView.readFloat32(ctrl.aoPlacePosMmSlot);
+        if (Math.abs(rawPlace) > 0.01) {
+          placeTargetMm = rawPlace;
+        }
+      }
+
+      let currTraverseMm = isHeadless
+        ? ctrl.headlessTraversePosMm
+        : ctrl.traverseActualPosSlot >= 0
+          ? bufferView.readFloat32(ctrl.traverseActualPosSlot)
+          : homeTraverseMm;
+      let currVerticalMm = isHeadless
+        ? ctrl.headlessVerticalPosMm
+        : ctrl.verticalStrokeSlot >= 0
+          ? bufferView.readFloat32(ctrl.verticalStrokeSlot)
+          : 0;
+
+      const vMinMm = ctrl.verticalAxisRole
+        ? Math.min(ctrl.verticalAxisRole.minLimitMm, ctrl.verticalAxisRole.maxLimitMm)
+        : 0;
+      const vRawMaxMm = ctrl.verticalAxisRole
+        ? Math.max(ctrl.verticalAxisRole.minLimitMm, ctrl.verticalAxisRole.maxLimitMm)
+        : 250;
+      const effectiveVMaxMm =
+        dynMaxStrokeMm !== null
+          ? Math.min(vRawMaxMm, Math.max(vMinMm, dynMaxStrokeMm))
+          : vRawMaxMm;
+
+      const isVerticalRetracted = Math.abs(currVerticalMm - vMinMm) <= 3.5;
+      const isVerticalExtended = Math.abs(currVerticalMm - effectiveVMaxMm) <= 4.0;
+
+      let autoTargetTraverseCmd: number | null = null;
+      let autoExtendVerticalCmd: boolean | null = null;
+
+      if (autoCycleOn) {
+        ctrl.wasAutoCycleActive = true;
+        ctrl.phaseTimerSec += dt;
+
+        switch (ctrl.autoPhase) {
+          case 'WAIT_PART': {
+            autoTargetTraverseCmd = homeTraverseMm;
+            autoExtendVerticalCmd = false;
+            ctrl.autoVacuumCmd = false;
+
+            const atHome = Math.abs(currTraverseMm - homeTraverseMm) <= 3.5;
+            const partCenteredAndReady =
+              candidatePickItem !== null &&
+              candidateHorizDistM <= Math.min(0.085, grabRadiusM * 0.6) &&
+              candidatePickItem.currentSpeedMmPerSec <= 40;
+
+            if (atHome && isVerticalRetracted && partCenteredAndReady) {
+              ctrl.autoPhase = 'LOWER_PICK';
+              ctrl.phaseTimerSec = 0;
+            }
+            break;
+          }
+          case 'LOWER_PICK': {
+            autoTargetTraverseCmd = homeTraverseMm;
+            autoExtendVerticalCmd = true;
+            ctrl.autoVacuumCmd = true;
+
+            if (grippedItem !== null || (isVerticalExtended && candidatePickItem !== null)) {
+              ctrl.autoPhase = 'GRAB_DWELL';
+              ctrl.phaseTimerSec = 0;
+            } else if (ctrl.phaseTimerSec > 1.5) {
+              ctrl.autoPhase = 'WAIT_PART';
+              ctrl.phaseTimerSec = 0;
+            }
+            break;
+          }
+          case 'GRAB_DWELL': {
+            autoTargetTraverseCmd = homeTraverseMm;
+            autoExtendVerticalCmd = true;
+            ctrl.autoVacuumCmd = true;
+
+            if (ctrl.phaseTimerSec >= 0.08) {
+              ctrl.autoPhase = grippedItem ? 'LIFT_PICK' : 'WAIT_PART';
+              ctrl.phaseTimerSec = 0;
+            }
+            break;
+          }
+          case 'LIFT_PICK': {
+            autoTargetTraverseCmd = homeTraverseMm;
+            autoExtendVerticalCmd = false;
+            ctrl.autoVacuumCmd = true;
+
+            if (!grippedItem) {
+              ctrl.autoPhase = 'WAIT_PART';
+              ctrl.phaseTimerSec = 0;
+            } else if (isVerticalRetracted) {
+              ctrl.autoPhase = 'TRAVERSE_PLACE';
+              ctrl.phaseTimerSec = 0;
+            }
+            break;
+          }
+          case 'TRAVERSE_PLACE': {
+            autoTargetTraverseCmd = placeTargetMm;
+            autoExtendVerticalCmd = false;
+            ctrl.autoVacuumCmd = true;
+
+            if (!grippedItem) {
+              ctrl.autoPhase = 'RETURN_HOME';
+              ctrl.phaseTimerSec = 0;
+            } else if (Math.abs(currTraverseMm - placeTargetMm) <= 3.0) {
+              ctrl.autoPhase = 'LOWER_PLACE';
+              ctrl.phaseTimerSec = 0;
+            }
+            break;
+          }
+          case 'LOWER_PLACE': {
+            autoTargetTraverseCmd = placeTargetMm;
+            autoExtendVerticalCmd = true;
+            ctrl.autoVacuumCmd = true;
+
+            // Check that Place Lane drop spot isn't currently occupied by another box
+            let dropZoneClear = true;
+            if (underBeltNode && grippedItem) {
+              const gHalf = grippedItem.dimensionsMm[0] * 0.5;
+              for (let i = 0; i < this.items.length; i++) {
+                const other = this.items[i];
+                if (other.id === grippedItem.id) continue;
+                if (other.grippedByKey || other.worldPoseOverride) continue;
+                if (other.pathNodeId !== underBeltNode.id) continue;
+                const minGap =
+                  gHalf + other.dimensionsMm[0] * 0.5 + ACCUMULATION_GAP_MM * 0.6;
+                if (Math.abs(other.distanceMm - underBeltDistMm) < minGap) {
+                  dropZoneClear = false;
+                  break;
+                }
+              }
+            }
+
+            if (dropZoneClear && (isVerticalExtended || ctrl.phaseTimerSec >= 1.2)) {
+              ctrl.autoPhase = 'RELEASE_DWELL';
+              ctrl.phaseTimerSec = 0;
+            }
+            break;
+          }
+          case 'RELEASE_DWELL': {
+            autoTargetTraverseCmd = placeTargetMm;
+            autoExtendVerticalCmd = true;
+            ctrl.autoVacuumCmd = false;
+
+            if (ctrl.phaseTimerSec >= 0.08) {
+              ctrl.autoPhase = 'LIFT_PLACE';
+              ctrl.phaseTimerSec = 0;
+            }
+            break;
+          }
+          case 'LIFT_PLACE': {
+            autoTargetTraverseCmd = placeTargetMm;
+            autoExtendVerticalCmd = false;
+            ctrl.autoVacuumCmd = false;
+
+            if (isVerticalRetracted) {
+              ctrl.autoPhase = 'RETURN_HOME';
+              ctrl.phaseTimerSec = 0;
+            }
+            break;
+          }
+          case 'RETURN_HOME': {
+            autoTargetTraverseCmd = homeTraverseMm;
+            autoExtendVerticalCmd = false;
+            ctrl.autoVacuumCmd = false;
+
+            if (Math.abs(currTraverseMm - homeTraverseMm) <= 3.5) {
+              ctrl.autoPhase = 'WAIT_PART';
+              ctrl.phaseTimerSec = 0;
+            }
+            break;
+          }
+        }
+
+        if (ctrl.traverseAxisNodeName) {
+          setLiveAutoAxisTargetMm(
+            ctrl.instanceId,
+            ctrl.traverseAxisNodeName,
+            autoTargetTraverseCmd
+          );
+        }
+        if (ctrl.verticalAxisNodeName) {
+          setLiveAutoCylinderExtend(
+            ctrl.instanceId,
+            ctrl.verticalAxisNodeName,
+            autoExtendVerticalCmd
+          );
+        }
+        setLiveAutoVacuumOn(ctrl.instanceId, ctrl.nodeName, ctrl.autoVacuumCmd);
+      } else if (ctrl.wasAutoCycleActive) {
+        ctrl.wasAutoCycleActive = false;
+        ctrl.autoPhase = 'WAIT_PART';
+        ctrl.phaseTimerSec = 0;
+        ctrl.autoVacuumCmd = false;
+        if (ctrl.traverseAxisNodeName) {
+          setLiveAutoAxisTargetMm(ctrl.instanceId, ctrl.traverseAxisNodeName, null);
+        }
+        if (ctrl.verticalAxisNodeName) {
+          setLiveAutoCylinderExtend(ctrl.instanceId, ctrl.verticalAxisNodeName, null);
+        }
+        setLiveAutoVacuumOn(ctrl.instanceId, ctrl.nodeName, null);
+      }
+
+      // 6. Headless Mode Actuator Stepping (when running outside R3F Canvas)
+      if (isHeadless) {
+        if (ctrl.traverseAxisRole) {
+          const tRole = ctrl.traverseAxisRole;
+          const tMin = Math.min(tRole.minLimitMm, tRole.maxLimitMm);
+          const tMax = Math.max(tRole.minLimitMm, tRole.maxLimitMm);
+          const rawTgt =
+            autoTargetTraverseCmd !== null
+              ? autoTargetTraverseCmd
+              : ctrl.traverseAoTargetSlot >= 0
+                ? bufferView.readFloat32(ctrl.traverseAoTargetSlot)
+                : tRole.initialPosMm;
+          const clampedTgt = Math.min(tMax, Math.max(tMin, rawTgt));
+          const maxV =
+            tRole.behavior?.presetType === 'ServoPositioning'
+              ? tRole.behavior.maxVelocityUnitsPerSec
+              : 500;
+          const acc =
+            tRole.behavior?.presetType === 'ServoPositioning'
+              ? tRole.behavior.accelerationUnitsPerSec2
+              : 1500;
+          const dec =
+            tRole.behavior?.presetType === 'ServoPositioning'
+              ? tRole.behavior.decelerationUnitsPerSec2
+              : 1800;
+
+          const stepped = stepHeadlessServo1D(
+            ctrl.headlessTraversePosMm,
+            ctrl.headlessTraverseVelMmS,
+            clampedTgt,
+            maxV,
+            acc,
+            dec,
+            dt
+          );
+          ctrl.headlessTraversePosMm = stepped.pos;
+          ctrl.headlessTraverseVelMmS = stepped.vel;
+          currTraverseMm = stepped.pos;
+
+          if (ctrl.traverseActualPosSlot >= 0) {
+            bufferView.writeFloat32(ctrl.traverseActualPosSlot, stepped.pos);
+          }
+          if (ctrl.traverseInPosSlot >= 0) {
+            bufferView.writeSimToPlcBool(
+              ctrl.traverseInPosSlot,
+              Math.abs(stepped.pos - clampedTgt) <= 0.6 && Math.abs(stepped.vel) <= 2.5
+            );
+          }
+        }
+
+        if (ctrl.verticalAxisRole) {
+          const vRole = ctrl.verticalAxisRole;
+          const extSpd =
+            vRole.behavior?.presetType === 'PneumaticCylinder'
+              ? vRole.behavior.extendSpeedMmPerSec
+              : 260;
+          const retSpd =
+            vRole.behavior?.presetType === 'PneumaticCylinder'
+              ? vRole.behavior.retractSpeedMmPerSec
+              : 300;
+          const cmdExt =
+            autoExtendVerticalCmd !== null
+              ? autoExtendVerticalCmd
+              : ctrl.verticalDoExtendSlot >= 0
+                ? bufferView.readPlcToSimBool(ctrl.verticalDoExtendSlot)
+                : false;
+
+          if (cmdExt) {
+            ctrl.headlessVerticalPosMm = Math.min(
+              effectiveVMaxMm,
+              ctrl.headlessVerticalPosMm + extSpd * dt
+            );
+          } else {
+            ctrl.headlessVerticalPosMm = Math.max(
+              vMinMm,
+              ctrl.headlessVerticalPosMm - retSpd * dt
+            );
+          }
+          if (ctrl.headlessVerticalPosMm > effectiveVMaxMm) {
+            ctrl.headlessVerticalPosMm = effectiveVMaxMm;
+          }
+          currVerticalMm = ctrl.headlessVerticalPosMm;
+
+          if (ctrl.verticalStrokeSlot >= 0) {
+            bufferView.writeFloat32(ctrl.verticalStrokeSlot, currVerticalMm);
+          }
+          if (ctrl.verticalReedRetSlot >= 0) {
+            bufferView.writeSimToPlcBool(
+              ctrl.verticalReedRetSlot,
+              Math.abs(currVerticalMm - vMinMm) <= 2.0
+            );
+          }
+          if (ctrl.verticalReedExtSlot >= 0) {
+            bufferView.writeSimToPlcBool(
+              ctrl.verticalReedExtSlot,
+              Math.abs(currVerticalMm - effectiveVMaxMm) <= 2.0 &&
+                effectiveVMaxMm > vMinMm + 0.5
+            );
+          }
+        }
+
+        this.computeAnalyticalGripperWorldPose(
+          ctrl,
+          inst,
+          bufferView,
+          true,
+          _gripPadWorldPos,
+          _gripPadWorldQuat
+        );
+      }
+
+      // 7. Suction Grab, 6-DOF Carry & Deterministic Conveyor Transfer Handoff
+      const effectiveVacOn = autoCycleOn
+        ? ctrl.autoVacuumCmd
+        : ctrl.doVacuumOnSlot >= 0 && bufferView.readPlcToSimBool(ctrl.doVacuumOnSlot);
+
+      const withinSuctionReach =
+        candidatePickItem !== null &&
+        Math.abs(_gripPadWorldPos.y - candidateTopY) <= grabTolM;
+
+      const partPresent = grippedItem !== null || withinSuctionReach;
+      if (ctrl.diPartPresentSlot >= 0) {
+        bufferView.writeSimToPlcBool(ctrl.diPartPresentSlot, partPresent);
+      }
+
+      // (a) Grab transition
+      if (!grippedItem && effectiveVacOn && withinSuctionReach && candidatePickItem) {
+        grippedItem = candidatePickItem;
+        grippedItem.grippedByKey = ctrl.key;
+        ctrl.grippedItemId = grippedItem.id;
+
+        if (grippedItem.worldPoseOverride) {
+          _gripItemQuat.set(...grippedItem.worldPoseOverride.quaternion);
+        } else {
+          const lut = this.samplerCache.get(grippedItem.pathNodeId)?.table;
+          if (lut) {
+            sampleWorldPathPose(lut, grippedItem.distanceMm, _gripItemPos, _gripItemQuat);
+          } else {
+            _gripItemQuat.identity();
+          }
+        }
+        ctrl.gripRelQuat
+          .copy(_gripPadWorldQuat)
+          .invert()
+          .multiply(_gripItemQuat);
+      }
+
+      // (b) Carry update vs Release & Conveyor Transfer Handoff
+      if (grippedItem && effectiveVacOn) {
+        const gHgtM = Math.max(0.03, grippedItem.dimensionsMm[2] * 0.001);
+        _gripComposedQuat.copy(_gripPadWorldQuat).multiply(ctrl.gripRelQuat);
+
+        grippedItem.currentSpeedMmPerSec = 0;
+        grippedItem.isAccumulated = false;
+        grippedItem.worldPoseOverride = {
+          position: [
+            _gripPadWorldPos.x,
+            _gripPadWorldPos.y - gHgtM * 0.5,
+            _gripPadWorldPos.z,
+          ],
+          quaternion: [
+            _gripComposedQuat.x,
+            _gripComposedQuat.y,
+            _gripComposedQuat.z,
+            _gripComposedQuat.w,
+          ],
+        };
+
+        if (ctrl.diPartGrippedSlot >= 0) {
+          bufferView.writeSimToPlcBool(ctrl.diPartGrippedSlot, true);
+        }
+      } else if (grippedItem && !effectiveVacOn) {
+        // Release suction -> hand off onto underlying conveyor spline OR rest cleanly on floor!
+        const gHgtM = Math.max(0.03, grippedItem.dimensionsMm[2] * 0.001);
+        const gHalfLen = grippedItem.dimensionsMm[0] * 0.5;
+        const dropBottomY = _gripPadWorldPos.y - gHgtM;
+
+        grippedItem.grippedByKey = undefined;
+        ctrl.grippedItemId = null;
+
+        let targetBeltNode: TransportPathNode | null = null;
+        let targetBeltDistMm = 0;
+        let bestLat = Infinity;
+
+        for (const candNode of allNodes) {
+          const lut = this.samplerCache.get(candNode.id)?.table;
+          if (!lut) continue;
+          const proj = projectPointToPathDistanceMm(lut, _gripPadWorldPos);
+          sampleWorldPathPose(lut, proj.distanceMm, _tmpVecA);
+          const vDiff = Math.abs(dropBottomY - _tmpVecA.y);
+          if (
+            proj.lateralDistMeters <= 0.34 &&
+            vDiff <= 0.48 &&
+            proj.lateralDistMeters < bestLat
+          ) {
+            bestLat = proj.lateralDistMeters;
+            targetBeltNode = candNode;
+            targetBeltDistMm = proj.distanceMm;
+          }
+        }
+
+        if (targetBeltNode) {
+          const lut = this.samplerCache.get(targetBeltNode.id)?.table;
+          const arcLenMm = lut?.arcLengthMm ?? targetBeltNode.arcLengthMm;
+          const clampedMm = Math.min(
+            Math.max(gHalfLen + 8, targetBeltDistMm),
+            Math.max(gHalfLen + 8, arcLenMm - gHalfLen - 8)
+          );
+          grippedItem.pathNodeId = targetBeltNode.id;
+          grippedItem.distanceMm = Number(clampedMm.toFixed(1));
+          grippedItem.prevDistanceMm = grippedItem.distanceMm;
+          grippedItem.currentSpeedMmPerSec = 0;
+          grippedItem.isAccumulated = false;
+          grippedItem.worldPoseOverride = undefined;
+        } else {
+          _gripComposedQuat.copy(_gripPadWorldQuat).multiply(ctrl.gripRelQuat);
+          grippedItem.currentSpeedMmPerSec = 0;
+          grippedItem.isAccumulated = false;
+          grippedItem.worldPoseOverride = {
+            position: [
+              _gripPadWorldPos.x,
+              gHgtM * 0.5 + 0.004,
+              _gripPadWorldPos.z,
+            ],
+            quaternion: [
+              _gripComposedQuat.x,
+              _gripComposedQuat.y,
+              _gripComposedQuat.z,
+              _gripComposedQuat.w,
+            ],
+          };
+        }
+
+        if (ctrl.diPartGrippedSlot >= 0) {
+          bufferView.writeSimToPlcBool(ctrl.diPartGrippedSlot, false);
+        }
+      } else {
+        if (ctrl.diPartGrippedSlot >= 0) {
+          bufferView.writeSimToPlcBool(ctrl.diPartGrippedSlot, false);
+        }
       }
     }
   }

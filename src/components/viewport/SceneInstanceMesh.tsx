@@ -240,12 +240,17 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
     return {
       edgesGeometry,
       center: [cx, cy, cz] as [number, number, number],
+      bottomY: rec.restBoundsComp.min[1],
       role,
       axisQuaternion,
       ringQuaternion,
       arrowLength,
       pivotPos,
       ringRadius: Math.max(0.12, Math.min(0.55, Math.max(sx, sy, sz) * 0.52)),
+      suctionRadius:
+        role?.role === 'VacuumGripper'
+          ? Math.max(0.06, Math.min(0.45, role.grabRadiusMm * 0.001))
+          : 0.18,
     };
     // rigVersion ensures overlay refreshes immediately once rig finishes building
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -303,7 +308,7 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
       selectSubMesh(pickedSubMesh);
       const roleType = component.nodeRoles[pickedSubMesh]?.role ?? 'StaticMesh';
       setStatusMessage(
-        `Selected sub-mesh "${pickedSubMesh}" (${roleType}) — open Builder tab or double-click part to configure Linear/Rotary joint.`
+        `Selected sub-mesh "${pickedSubMesh}" (${roleType}) — open Builder tab or double-click part to configure Linear/Rotary/Gripper role.`
       );
     }
   };
@@ -317,7 +322,7 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
     if (pickedSubMesh) {
       selectSubMesh(pickedSubMesh);
       setStatusMessage(
-        `Editing "${pickedSubMesh}" in Component Builder — choose LinearAxis, RotaryAxis, or VisualEffect.`
+        `Editing "${pickedSubMesh}" in Component Builder — choose LinearAxis, RotaryAxis, VacuumGripper, or VisualEffect.`
       );
     }
   };
@@ -463,7 +468,7 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
           </lineSegments>
         )}
 
-        {/* Milestone 2: Sub-Mesh Highlight Box + 3D Linear/Rotary Axis Preview */}
+        {/* Milestone 2: Sub-Mesh Highlight Box + 3D Linear/Rotary/Gripper Axis Preview */}
         {subMeshOverlay && (
           <>
             {/* Moving 12-edge Amber Sub-Mesh Wireframe Box */}
@@ -480,6 +485,24 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
                   toneMapped={false}
                 />
               </lineSegments>
+
+              {/* 3D VacuumGripper Suction Capture Zone Ring */}
+              {subMeshOverlay.role?.role === 'VacuumGripper' && (
+                <mesh
+                  position={[
+                    subMeshOverlay.center[0],
+                    subMeshOverlay.bottomY,
+                    subMeshOverlay.center[2],
+                  ]}
+                  rotation={[Math.PI * 0.5, 0, 0]}
+                  raycast={() => null}
+                >
+                  <torusGeometry
+                    args={[subMeshOverlay.suctionRadius, 0.006, 10, 48]}
+                  />
+                  <meshBasicMaterial color="#a855f7" toneMapped={false} />
+                </mesh>
+              )}
             </group>
 
             {/* 3D LinearAxis Travel Vector Arrow */}

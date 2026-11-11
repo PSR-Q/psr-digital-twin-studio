@@ -77,6 +77,8 @@ export type InspectorTabMode =
 function pickDefaultSubMesh(comp: ComponentDefinition | undefined): string | null {
   if (!comp) return null;
   const roles = Object.values(comp.nodeRoles);
+  const activeGripper = roles.find((r) => r.role === 'VacuumGripper');
+  if (activeGripper) return activeGripper.nodeName;
   const activeAxis = roles.find(
     (r) => r.role === 'LinearAxis' || r.role === 'RotaryAxis'
   );
@@ -141,16 +143,18 @@ function buildStarterDemoScene(): SceneSchema {
     ...base.environment,
     ...loadSavedViewportPrefs(),
   };
-  base.metadata.name = 'Packaging, Stopper Queue & HSC Line Demo';
+  base.metadata.name = 'Dual-Lane Vacuum Pick & Transfer + HSC Line Demo';
 
-  // Precision-docked 5-stage inline transport line (Z = 0) + Process & OpenUSD Servo Cell (Z = -2.05)
+  // Precision-docked Dual-Lane Packaging & Vacuum Pick-and-Transfer Line:
+  //   Main Lane (Z = 0.00 m): Infeed_Conveyor_01 -> Stopper_Gate_01 -> Buffer_Conveyor_02 -> PickPlace_Gantry_01 -> Corner_Turntable_01 -> Outfeed_Conveyor_03
+  //   Transfer Lane (Z = +0.80 m): PickPlace_Gantry_01 (Transfer Bed) -> Transfer_Outfeed_04
   const instances: SceneNodeInstance[] = [
     {
       id: 'inst-conv-01',
       name: 'Infeed_Conveyor_01',
       componentId: 'builtin-belt-conveyor-2m',
       transform: {
-        position: [-2.2, 0, 0],
+        position: [-2.6, 0, 0],
         rotationDeg: [0, 0, 0],
         scale: [1, 1, 1],
       },
@@ -163,7 +167,7 @@ function buildStarterDemoScene(): SceneSchema {
       name: 'Stopper_Gate_01',
       componentId: 'builtin-pneumatic-stopper',
       transform: {
-        position: [-1.06, 0, 0],
+        position: [-1.46, 0, 0],
         rotationDeg: [0, 0, 0],
         scale: [1, 1, 1],
       },
@@ -176,33 +180,7 @@ function buildStarterDemoScene(): SceneSchema {
       name: 'Buffer_Conveyor_02',
       componentId: 'builtin-belt-conveyor-2m',
       transform: {
-        position: [0.08, 0, 0],
-        rotationDeg: [0, 0, 0],
-        scale: [1, 1, 1],
-      },
-      visible: true,
-      locked: false,
-      parameters: {},
-    },
-    {
-      id: 'inst-turntable-01',
-      name: 'Corner_Turntable_01',
-      componentId: 'builtin-rotary-turntable',
-      transform: {
-        position: [1.56, 0, 0],
-        rotationDeg: [0, 0, 0],
-        scale: [1, 1, 1],
-      },
-      visible: true,
-      locked: false,
-      parameters: {},
-    },
-    {
-      id: 'inst-conv-03',
-      name: 'Outfeed_Conveyor_03',
-      componentId: 'builtin-belt-conveyor-1m',
-      transform: {
-        position: [2.54, 0, 0],
+        position: [-0.32, 0, 0],
         rotationDeg: [0, 0, 0],
         scale: [1, 1, 1],
       },
@@ -215,7 +193,46 @@ function buildStarterDemoScene(): SceneSchema {
       name: 'PickPlace_Gantry_01',
       componentId: 'builtin-openusd-cartesian-gantry',
       transform: {
-        position: [-1.55, 0, -2.05],
+        position: [1.18, 0, 0],
+        rotationDeg: [0, 0, 0],
+        scale: [1, 1, 1],
+      },
+      visible: true,
+      locked: false,
+      parameters: {},
+    },
+    {
+      id: 'inst-turntable-01',
+      name: 'Corner_Turntable_01',
+      componentId: 'builtin-rotary-turntable',
+      transform: {
+        position: [2.16, 0, 0],
+        rotationDeg: [0, 0, 0],
+        scale: [1, 1, 1],
+      },
+      visible: true,
+      locked: false,
+      parameters: {},
+    },
+    {
+      id: 'inst-conv-03',
+      name: 'Outfeed_Conveyor_03',
+      componentId: 'builtin-belt-conveyor-1m',
+      transform: {
+        position: [3.14, 0, 0],
+        rotationDeg: [0, 0, 0],
+        scale: [1, 1, 1],
+      },
+      visible: true,
+      locked: false,
+      parameters: {},
+    },
+    {
+      id: 'inst-conv-04',
+      name: 'Transfer_Outfeed_04',
+      componentId: 'builtin-belt-conveyor-1m',
+      transform: {
+        position: [2.18, 0, 0.8],
         rotationDeg: [0, 0, 0],
         scale: [1, 1, 1],
       },
@@ -228,7 +245,7 @@ function buildStarterDemoScene(): SceneSchema {
       name: 'Mixing_Vessel_01',
       componentId: 'builtin-mixing-tank-agitator',
       transform: {
-        position: [1.56, 0, -2.05],
+        position: [0.8, 0, -2.05],
         rotationDeg: [0, 90, 0],
         scale: [1, 1, 1],
       },
@@ -247,8 +264,9 @@ function buildStarterDemoScene(): SceneSchema {
       id: 'spawner-infeed-01',
       instanceId: 'inst-conv-01',
       targetPathNodeId: makeTransportPathNodeId('inst-conv-01', 'path-main'),
+      enabled: true,
       mode: 'interval',
-      intervalSec: 2.1,
+      intervalSec: 2.8,
       maxActiveItems: 40,
       partDimensionsMm: [280, 220, 160],
       partColorHex: '#0ea5e9',
@@ -259,6 +277,11 @@ function buildStarterDemoScene(): SceneSchema {
       id: 'sink-outfeed-03',
       instanceId: 'inst-conv-03',
       sourcePathNodeId: makeTransportPathNodeId('inst-conv-03', 'path-main'),
+    },
+    {
+      id: 'sink-transfer-04',
+      instanceId: 'inst-conv-04',
+      sourcePathNodeId: makeTransportPathNodeId('inst-conv-04', 'path-main'),
     },
   ];
   seedGraph.sensors = [
@@ -301,6 +324,15 @@ function buildStarterDemoScene(): SceneSchema {
     prevTransportGraph: seedGraph,
     prevTagMap: base.plcTagMap,
   });
+
+  // Enable PickPlace_Gantry_01 Auto Pick & Place (`DO_AutoCycle = TRUE`) out-of-the-box so pressing Play
+  // immediately demonstrates live 3D Vacuum Suction Pick -> Lift -> +800mm Traverse -> Lane 2 Transfer!
+  synced.plcTagMap.bindings = synced.plcTagMap.bindings.map((b) =>
+    b.instanceId === 'inst-gantry-01' &&
+    b.componentSignalKey === 'Vacuum_Gripper_Tool_Axis::DO_AutoCycle'
+      ? { ...b, manualForceEnabled: true, manualForceValue: true }
+      : b
+  );
 
   base.instances = instances;
   base.snapConnections = snapConnections;
@@ -525,9 +557,9 @@ runtimeBusClient.syncTagMap(initialDemoScene.plcTagMap);
 
 export const useEditorStore = create<EditorStoreState>((set, get) => ({
   scene: initialDemoScene,
-  selectedInstanceId: 'inst-stopper-01',
+  selectedInstanceId: 'inst-gantry-01',
   selectedSubMeshName: null,
-  inspectorTab: 'plc',
+  inspectorTab: 'transform',
   isTagMatrixModalOpen: false,
   jogPreview: null,
   isDrawingSplinePath: false,
@@ -537,7 +569,7 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
   runState: 'STOPPED',
   isDirty: false,
   statusMessage:
-    'Milestone 4 Ready — Select PLC Driver (S7-PLCSIM Adv, MELSEC 3E GX Sim3, OPC UA, or InternalSim), map I/O addresses in the Tag Matrix, or press Play (Space).',
+    'Vacuum Pick & Transfer Ready — Press Play (Space) to watch PickPlace_Gantry_01 pick cartons off Main Lane and transfer +800 mm onto Lane 2!',
 
   selectInstance: (id) =>
     set((state) => {
@@ -896,7 +928,9 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     };
 
     const nextLibrary = cow.library.map((c) =>
-      c.id === cow.targetComponent!.id ? { ...c, transportPaths: [nextTpl] } : c
+      c.id === cow.targetComponent!.id
+        ? { ...c, transportPaths: [nextTpl, ...c.transportPaths.slice(1)] }
+        : c
     );
     const catalogMap = getCatalogMap(nextLibrary);
     const nextConnections = recomputeSceneSnapConnections(cow.instances, catalogMap);
@@ -940,7 +974,13 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     );
     const nextLibrary = cow.library.map((c) =>
       c.id === cow.targetComponent!.id
-        ? { ...c, transportPaths: [{ ...tpl, waypoints: nextWaypoints }] }
+        ? {
+            ...c,
+            transportPaths: [
+              { ...tpl, waypoints: nextWaypoints },
+              ...c.transportPaths.slice(1),
+            ],
+          }
         : c
     );
     const synced = syncSceneTransportAndSignals({
@@ -998,7 +1038,13 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
 
     const nextLibrary = cow.library.map((c) =>
       c.id === cow.targetComponent!.id
-        ? { ...c, transportPaths: [{ ...tpl, waypoints: nextWaypoints }] }
+        ? {
+            ...c,
+            transportPaths: [
+              { ...tpl, waypoints: nextWaypoints },
+              ...c.transportPaths.slice(1),
+            ],
+          }
         : c
     );
     const synced = syncSceneTransportAndSignals({
@@ -1036,7 +1082,13 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     const nextWaypoints = tpl.waypoints.filter((_, idx) => idx !== waypointIndex);
     const nextLibrary = cow.library.map((c) =>
       c.id === cow.targetComponent!.id
-        ? { ...c, transportPaths: [{ ...tpl, waypoints: nextWaypoints }] }
+        ? {
+            ...c,
+            transportPaths: [
+              { ...tpl, waypoints: nextWaypoints },
+              ...c.transportPaths.slice(1),
+            ],
+          }
         : c
     );
     const synced = syncSceneTransportAndSignals({
@@ -1077,7 +1129,9 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       waypoints: [...tpl.waypoints].reverse(),
     };
     const nextLibrary = cow.library.map((c) =>
-      c.id === cow.targetComponent!.id ? { ...c, transportPaths: [reversed] } : c
+      c.id === cow.targetComponent!.id
+        ? { ...c, transportPaths: [reversed, ...c.transportPaths.slice(1)] }
+        : c
     );
     const synced = syncSceneTransportAndSignals({
       instances: cow.instances,
@@ -1148,7 +1202,9 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     const tpl = cow.targetComponent.transportPaths[0];
     const nextTpl: ComponentPathTemplate = { ...tpl, ...patch };
     const nextLibrary = cow.library.map((c) =>
-      c.id === cow.targetComponent!.id ? { ...c, transportPaths: [nextTpl] } : c
+      c.id === cow.targetComponent!.id
+        ? { ...c, transportPaths: [nextTpl, ...c.transportPaths.slice(1)] }
+        : c
     );
     const synced = syncSceneTransportAndSignals({
       instances: cow.instances,
@@ -1901,7 +1957,7 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
     runtimeBusClient.syncTagMap(demo.plcTagMap);
     set({
       scene: demo,
-      selectedInstanceId: 'inst-stopper-01',
+      selectedInstanceId: 'inst-gantry-01',
       selectedSubMeshName: null,
       jogPreview: null,
       isDrawingSplinePath: false,
@@ -1909,7 +1965,7 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       runState: 'STOPPED',
       isDirty: false,
       statusMessage:
-        'Loaded Packaging, Stopper Queue & HSC Encoder Demo Line — press Play (Space) to start material flow!',
+        'Loaded Dual-Lane Vacuum Pick & Transfer Demo Line — press Play (Space) to watch cartons get picked & transferred to Lane 2!',
     });
   },
 
@@ -1936,7 +1992,7 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
           ? { ...structuredClone(builtinDef.nodeRoles), ...structuredClone(comp.nodeRoles) }
           : structuredClone(comp.nodeRoles);
 
-        // Migrate legacy v0.4.2 default strokes on Stopper Gate (110mm -> 95mm) & OpenUSD Gantry (240mm -> 165mm)
+        // Migrate legacy strokes & upgrade saved OpenUSD Cartesian Gantry to v0.5.0 Dual-Lane VacuumGripper
         if (
           comp.id === 'builtin-pneumatic-stopper' &&
           mergedNodeRoles.Piston_Stopper_Blade_Axis?.role === 'LinearAxis' &&
@@ -1944,12 +2000,31 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
         ) {
           mergedNodeRoles.Piston_Stopper_Blade_Axis.maxLimitMm = 95;
         }
-        if (
-          comp.id === 'builtin-openusd-cartesian-gantry' &&
-          mergedNodeRoles.Vertical_Z_Mast_Axis?.role === 'LinearAxis' &&
-          mergedNodeRoles.Vertical_Z_Mast_Axis.maxLimitMm === 240
-        ) {
-          mergedNodeRoles.Vertical_Z_Mast_Axis.maxLimitMm = 165;
+        const upgradeDualLaneGantry =
+          comp.id === 'builtin-openusd-cartesian-gantry' && builtinDef !== undefined;
+        if (upgradeDualLaneGantry && builtinDef) {
+          if (
+            mergedNodeRoles.Vertical_Z_Mast_Axis?.role === 'LinearAxis' &&
+            (mergedNodeRoles.Vertical_Z_Mast_Axis.maxLimitMm === 240 ||
+              mergedNodeRoles.Vertical_Z_Mast_Axis.maxLimitMm === 165)
+          ) {
+            mergedNodeRoles.Vertical_Z_Mast_Axis.maxLimitMm = 250;
+          }
+          if (
+            mergedNodeRoles.Servo_Traverse_Carriage_Axis?.role === 'LinearAxis' &&
+            mergedNodeRoles.Servo_Traverse_Carriage_Axis.maxLimitMm === 420
+          ) {
+            mergedNodeRoles.Servo_Traverse_Carriage_Axis.minLimitMm = -150;
+            mergedNodeRoles.Servo_Traverse_Carriage_Axis.maxLimitMm = 900;
+          }
+          if (
+            !mergedNodeRoles.Vacuum_Gripper_Tool_Axis ||
+            mergedNodeRoles.Vacuum_Gripper_Tool_Axis.role === 'StaticMesh'
+          ) {
+            mergedNodeRoles.Vacuum_Gripper_Tool_Axis = structuredClone(
+              builtinDef.nodeRoles.Vacuum_Gripper_Tool_Axis
+            );
+          }
         }
 
         mergedMap.set(comp.id, {
@@ -1958,6 +2033,12 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
             ? {
                 boundingBox: structuredClone(builtinDef.boundingBox),
                 modelSource: structuredClone(builtinDef.modelSource),
+                ...(upgradeDualLaneGantry && comp.transportPaths.length < 2
+                  ? {
+                      snapPorts: structuredClone(builtinDef.snapPorts),
+                      transportPaths: structuredClone(builtinDef.transportPaths),
+                    }
+                  : {}),
               }
             : {}),
           nodeRoles: mergedNodeRoles,

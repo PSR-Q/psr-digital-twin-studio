@@ -120,6 +120,13 @@ export interface FlowItemState {
   dimensionsMm: Vector3Tuple;
   colorHex: string;
   isAccumulated: boolean;
+  /** Active vacuum gripper composite key ("instanceId::nodeName") currently carrying this item */
+  grippedByKey?: string;
+  /** 6-DOF world pose override when lifted by a VacuumGripper or resting off-belt */
+  worldPoseOverride?: {
+    position: Vector3Tuple;
+    quaternion: [number, number, number, number];
+  };
 }
 
 export interface TransportGraph {

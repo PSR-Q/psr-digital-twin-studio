@@ -8,6 +8,7 @@ import type {
   SimulationRunState,
   SubMeshRoleAssignment,
   UUID,
+  VacuumGripperRole,
   Vector3Tuple,
   VisualEffectRole,
 } from '../shared/schemas';
@@ -23,6 +24,7 @@ import { makeNodeSignalKey } from './signalCatalogSync';
  * - Trapezoidal velocity/braking Servo positioning + InPosition feedback
  * - Continuous RPM rotary drives (with inertia ramp) & bounded indexing rotary tables
  * - Procedural chevron UV-scroll conveyor belts, emissive status lamps, and tank levels
+ * - Vacuum Gripper suction pads with live Component-Space pose & compliant workpiece stop
  * - Kinematic `parentNodeName` chaining across flat CAD sub-meshes
  */
 
@@ -37,6 +39,77 @@ export interface SubMeshBoundsSnapshot {
   max: Vector3Tuple;
   size: Vector3Tuple;
   center: Vector3Tuple;
+}
+
+export interface LiveGripperCompPose {
+  padBottomComp: Vector3Tuple;
+  quatComp: [number, number, number, number];
+  restBottomYComp: number;
+}
+
+const liveGripperCompPoseMap = new Map<string, LiveGripperCompPose>();
+const liveAxisDynamicMaxMmMap = new Map<string, number>();
+const liveAutoAxisTargetMmMap = new Map<string, number>();
+const liveAutoCylinderExtendMap = new Map<string, boolean>();
+const liveAutoVacuumOnMap = new Map<string, boolean>();
+
+export function getLiveGripperCompPose(
+  instanceId: UUID,
+  nodeName: string
+): LiveGripperCompPose | undefined {
+  return liveGripperCompPoseMap.get(`${instanceId}::${nodeName}`);
+}
+
+export function setLiveAxisDynamicMaxMm(
+  instanceId: UUID,
+  nodeName: string,
+  maxMm: number | null
+): void {
+  const key = `${instanceId}::${nodeName}`;
+  if (maxMm === null || !Number.isFinite(maxMm)) {
+    liveAxisDynamicMaxMmMap.delete(key);
+  } else {
+    liveAxisDynamicMaxMmMap.set(key, maxMm);
+  }
+}
+
+export function setLiveAutoAxisTargetMm(
+  instanceId: UUID,
+  nodeName: string,
+  targetMm: number | null
+): void {
+  const key = `${instanceId}::${nodeName}`;
+  if (targetMm === null || !Number.isFinite(targetMm)) {
+    liveAutoAxisTargetMmMap.delete(key);
+  } else {
+    liveAutoAxisTargetMmMap.set(key, targetMm);
+  }
+}
+
+export function setLiveAutoCylinderExtend(
+  instanceId: UUID,
+  nodeName: string,
+  extend: boolean | null
+): void {
+  const key = `${instanceId}::${nodeName}`;
+  if (extend === null) {
+    liveAutoCylinderExtendMap.delete(key);
+  } else {
+    liveAutoCylinderExtendMap.set(key, extend);
+  }
+}
+
+export function setLiveAutoVacuumOn(
+  instanceId: UUID,
+  nodeName: string,
+  vacuumOn: boolean | null
+): void {
+  const key = `${instanceId}::${nodeName}`;
+  if (vacuumOn === null) {
+    liveAutoVacuumOnMap.delete(key);
+  } else {
+    liveAutoVacuumOnMap.set(key, vacuumOn);
+  }
 }
 
 interface RestTransformRecord {
@@ -105,6 +178,7 @@ interface VisualEffectRuntime {
   emissiveOnColor: THREE.Color;
   emissiveOffColor: THREE.Color;
   autoLinkReedLamp: boolean;
+  autoLinkMachineActiveLamp: boolean;
   currentLevelPct: number;
   actualBeltRpm: number;
   doBeltRunSlot: number;
@@ -114,7 +188,23 @@ interface VisualEffectRuntime {
   aoLevelPctSlot: number;
 }
 
-type ActiveRoleRuntime = LinearAxisRuntime | RotaryAxisRuntime | VisualEffectRuntime;
+interface VacuumGripperRuntime {
+  kind: 'VacuumGripper';
+  nodeRecord: NodeGraphRecord;
+  role: VacuumGripperRole;
+  materials: THREE.MeshStandardMaterial[];
+  poseEntry: LiveGripperCompPose;
+  doAutoCycleSlot: number;
+  doVacuumOnSlot: number;
+  diPartPresentSlot: number;
+  diPartGrippedSlot: number;
+}
+
+type ActiveRoleRuntime =
+  | LinearAxisRuntime
+  | RotaryAxisRuntime
+  | VisualEffectRuntime
+  | VacuumGripperRuntime;
 
 export interface KinematicsInstanceRig {
   instanceId: UUID;
@@ -140,6 +230,10 @@ const _matScale = new THREE.Matrix4();
 const _matInvParent = new THREE.Matrix4();
 const _matNextLocal = new THREE.Matrix4();
 const _cornerScratch = new THREE.Vector3();
+const _colorGripEmerald = new THREE.Color('#10b981');
+const _colorVacCyan = new THREE.Color('#06b6d4');
+const _colorNearAmber = new THREE.Color('#f59e0b');
+const _colorGripperIdle = new THREE.Color('#0f172a');
 
 let cachedProceduralBeltCanvas: HTMLCanvasElement | null = null;
 
@@ -406,7 +500,9 @@ export function buildKinematicsRig(
     if (visited.has(a.nodeName)) return;
     visited.add(a.nodeName);
     if (
-      (a.role === 'LinearAxis' || a.role === 'RotaryAxis') &&
+      (a.role === 'LinearAxis' ||
+        a.role === 'RotaryAxis' ||
+        a.role === 'VacuumGripper') &&
       a.parentNodeName &&
       byName.has(a.parentNodeName)
     ) {
@@ -415,7 +511,10 @@ export function buildKinematicsRig(
     sortedAssignments.push(a);
   };
   for (const a of rawAssignments) {
-    visitRole(a);
+    if (a.role !== 'VisualEffect') visitRole(a);
+  }
+  for (const a of rawAssignments) {
+    if (a.role === 'VisualEffect') visitRole(a);
   }
 
   const activeRuntimes: ActiveRoleRuntime[] = [];
@@ -470,6 +569,28 @@ export function buildKinematicsRig(
         aiActualAngleDegSlot: slotOf(assignment.nodeName, 'AI_ActualAngleDeg'),
         diInPositionSlot: slotOf(assignment.nodeName, 'DI_InPosition'),
       });
+    } else if (assignment.role === 'VacuumGripper') {
+      const materials = collectStandardMaterials(nodeRecord.obj);
+      const [cx, , cz] = nodeRecord.restBoundsComp.center;
+      const minY = nodeRecord.restBoundsComp.min[1];
+      const poseEntry: LiveGripperCompPose = {
+        padBottomComp: [cx, minY, cz],
+        quatComp: [0, 0, 0, 1],
+        restBottomYComp: minY,
+      };
+      liveGripperCompPoseMap.set(`${instanceId}::${assignment.nodeName}`, poseEntry);
+
+      activeRuntimes.push({
+        kind: 'VacuumGripper',
+        nodeRecord,
+        role: assignment,
+        materials,
+        poseEntry,
+        doAutoCycleSlot: slotOf(assignment.nodeName, 'DO_AutoCycle'),
+        doVacuumOnSlot: slotOf(assignment.nodeName, 'DO_VacuumOn'),
+        diPartPresentSlot: slotOf(assignment.nodeName, 'DI_PartPresent'),
+        diPartGrippedSlot: slotOf(assignment.nodeName, 'DI_PartGripped'),
+      });
     } else if (assignment.role === 'VisualEffect') {
       const materials = collectStandardMaterials(nodeRecord.obj);
       const scrollTextures: THREE.Texture[] = [];
@@ -515,6 +636,7 @@ export function buildKinematicsRig(
         emissiveOnColor: new THREE.Color(assignment.emissiveOnHex || '#10b981'),
         emissiveOffColor: new THREE.Color(assignment.emissiveOffHex || '#1e293b'),
         autoLinkReedLamp: /reed/i.test(assignment.nodeName),
+        autoLinkMachineActiveLamp: /beacon|safety|tower/i.test(assignment.nodeName),
         currentLevelPct: 50,
         actualBeltRpm: 0,
         doBeltRunSlot: slotOf(assignment.nodeName, 'DO_BeltRun'),
@@ -609,6 +731,7 @@ export function stepKinematicsRig(
   }
 
   let anyReedExtendedOnMachine = false;
+  let anyGripperActiveOnMachine = false;
 
   for (let i = 0; i < rig.activeRuntimes.length; i++) {
     const rt = rig.activeRuntimes[i];
@@ -622,6 +745,14 @@ export function stepKinematicsRig(
       const { role } = rt;
       const minMm = Math.min(role.minLimitMm, role.maxLimitMm);
       const maxMm = Math.max(role.minLimitMm, role.maxLimitMm);
+      const axisKey = `${rig.instanceId}::${rec.name}`;
+      const dynMax = liveAxisDynamicMaxMmMap.get(axisKey);
+      const effectiveMaxMm =
+        dynMax !== undefined && role.behavior?.presetType !== 'ServoPositioning'
+          ? Math.min(maxMm, Math.max(minMm, dynMax))
+          : maxMm;
+      const autoTargetMm = liveAutoAxisTargetMmMap.get(axisKey);
+      const autoExtend = liveAutoCylinderExtendMap.get(axisKey);
 
       if (isJoggingThisNode) {
         rt.posMm = Math.min(maxMm, Math.max(minMm, jogPreview.value));
@@ -632,9 +763,11 @@ export function stepKinematicsRig(
       } else if (dt > 0) {
         if (role.behavior?.presetType === 'ServoPositioning') {
           const rawTarget =
-            rt.aoTargetPosMmSlot >= 0
-              ? bufferView.readFloat32(rt.aoTargetPosMmSlot)
-              : role.initialPosMm;
+            autoTargetMm !== undefined
+              ? autoTargetMm
+              : rt.aoTargetPosMmSlot >= 0
+                ? bufferView.readFloat32(rt.aoTargetPosMmSlot)
+                : role.initialPosMm;
           const clampedTarget = Math.min(maxMm, Math.max(minMm, rawTarget));
           const stepped = stepTrapezoidalServo(
             rt.posMm,
@@ -648,7 +781,7 @@ export function stepKinematicsRig(
           rt.posMm = Math.min(maxMm, Math.max(minMm, stepped.pos));
           rt.velMmPerSec = stepped.vel;
         } else {
-          // PneumaticCylinder (single-acting or double-acting)
+          // PneumaticCylinder (single-acting or double-acting) with compliant contact stop
           const actingMode =
             role.behavior?.presetType === 'PneumaticCylinder'
               ? role.behavior.actingMode
@@ -663,22 +796,33 @@ export function stepKinematicsRig(
               : 250;
 
           const cmdExtend =
-            rt.doExtendSlot >= 0 ? bufferView.readPlcToSimBool(rt.doExtendSlot) : false;
+            autoExtend !== undefined
+              ? autoExtend
+              : rt.doExtendSlot >= 0
+                ? bufferView.readPlcToSimBool(rt.doExtendSlot)
+                : false;
           const cmdRetract =
-            rt.doRetractSlot >= 0 ? bufferView.readPlcToSimBool(rt.doRetractSlot) : false;
+            autoExtend !== undefined
+              ? !autoExtend
+              : rt.doRetractSlot >= 0
+                ? bufferView.readPlcToSimBool(rt.doRetractSlot)
+                : false;
 
           if (actingMode === 'single-acting') {
             if (cmdExtend) {
-              rt.posMm = Math.min(maxMm, rt.posMm + extSpeed * dt);
+              rt.posMm = Math.min(effectiveMaxMm, rt.posMm + extSpeed * dt);
             } else {
               rt.posMm = Math.max(minMm, rt.posMm - retSpeed * dt);
             }
           } else {
             if (cmdExtend && !cmdRetract) {
-              rt.posMm = Math.min(maxMm, rt.posMm + extSpeed * dt);
+              rt.posMm = Math.min(effectiveMaxMm, rt.posMm + extSpeed * dt);
             } else if (cmdRetract && !cmdExtend) {
               rt.posMm = Math.max(minMm, rt.posMm - retSpeed * dt);
             }
+          }
+          if (rt.posMm > effectiveMaxMm) {
+            rt.posMm = effectiveMaxMm;
           }
         }
       }
@@ -687,8 +831,8 @@ export function stepKinematicsRig(
       const strokeSpan = Math.max(1, maxMm - minMm);
       const reedTol = Math.min(2.0, strokeSpan * 0.03 + 0.25);
       const atMin = Math.abs(rt.posMm - minMm) <= reedTol;
-      const atMax = Math.abs(rt.posMm - maxMm) <= reedTol;
-      rt.isReedExtended = atMax && maxMm > minMm + 0.5;
+      const atMax = Math.abs(rt.posMm - effectiveMaxMm) <= reedTol;
+      rt.isReedExtended = atMax && effectiveMaxMm > minMm + 0.5;
       if (rt.isReedExtended) anyReedExtendedOnMachine = true;
 
       if (rt.diReedRetractedSlot >= 0) {
@@ -704,10 +848,11 @@ export function stepKinematicsRig(
         bufferView.writeFloat32(rt.aiActualPosMmSlot, rt.posMm);
       }
       if (rt.diInPositionSlot >= 0 && rt.aoTargetPosMmSlot >= 0) {
-        const tgt = Math.min(
-          maxMm,
-          Math.max(minMm, bufferView.readFloat32(rt.aoTargetPosMmSlot))
-        );
+        const tgtRaw =
+          autoTargetMm !== undefined
+            ? autoTargetMm
+            : bufferView.readFloat32(rt.aoTargetPosMmSlot);
+        const tgt = Math.min(maxMm, Math.max(minMm, tgtRaw));
         bufferView.writeSimToPlcBool(
           rt.diInPositionSlot,
           Math.abs(rt.posMm - tgt) <= 0.6 && Math.abs(rt.velMmPerSec) <= 2.5
@@ -896,7 +1041,9 @@ export function stepKinematicsRig(
           rt.doLampOnSlot >= 0 ? bufferView.readPlcToSimBool(rt.doLampOnSlot) : false;
         const lampActive = manualForced
           ? cmdOn
-          : cmdOn || (rt.autoLinkReedLamp && anyReedExtendedOnMachine);
+          : cmdOn ||
+            (rt.autoLinkReedLamp && anyReedExtendedOnMachine) ||
+            (rt.autoLinkMachineActiveLamp && anyGripperActiveOnMachine);
 
         for (let m = 0; m < rt.materials.length; m++) {
           const mat = rt.materials[m];
@@ -920,6 +1067,56 @@ export function stepKinematicsRig(
         _matPivotNeg.makeTranslation(0, -yMin, 0);
         rec.deltaTotalComp.multiplyMatrices(_matPivotPos, _matScale).multiply(_matPivotNeg);
         rec.hasMotion = true;
+      }
+    } else if (rt.kind === 'VacuumGripper') {
+      const { role } = rt;
+      if (role.parentNodeName) {
+        const explicitParent = rig.nodeRecords.get(role.parentNodeName) ?? null;
+        // Only apply explicit parentNodeName delta when the CAD node is a flat sibling (not already a scene-graph child)
+        let isSceneDescendant = false;
+        let walk = rec.parentRecord;
+        while (walk) {
+          if (walk === explicitParent) {
+            isSceneDescendant = true;
+            break;
+          }
+          walk = walk.parentRecord;
+        }
+        if (explicitParent && !isSceneDescendant && explicitParent.hasMotion) {
+          rec.deltaTotalComp.copy(explicitParent.deltaTotalComp);
+          rec.hasMotion = true;
+        }
+      }
+
+      const autoOn =
+        rt.doAutoCycleSlot >= 0 && bufferView.readPlcToSimBool(rt.doAutoCycleSlot);
+      const autoVac = liveAutoVacuumOnMap.get(`${rig.instanceId}::${rec.name}`);
+      const vacOn =
+        autoVac !== undefined
+          ? autoVac
+          : rt.doVacuumOnSlot >= 0 && bufferView.readPlcToSimBool(rt.doVacuumOnSlot);
+      const gripped =
+        rt.diPartGrippedSlot >= 0 && bufferView.readSimToPlcBool(rt.diPartGrippedSlot);
+      const partNear =
+        rt.diPartPresentSlot >= 0 && bufferView.readSimToPlcBool(rt.diPartPresentSlot);
+
+      if (autoOn || vacOn || gripped) {
+        anyGripperActiveOnMachine = true;
+      }
+
+      const glowColor = gripped
+        ? _colorGripEmerald
+        : vacOn
+          ? _colorVacCyan
+          : partNear
+            ? _colorNearAmber
+            : _colorGripperIdle;
+      const glowIntensity = gripped ? 0.85 : vacOn ? 0.62 : partNear ? 0.34 : 0.06;
+
+      for (let m = 0; m < rt.materials.length; m++) {
+        const mat = rt.materials[m];
+        mat.emissive.copy(glowColor);
+        mat.emissiveIntensity = glowIntensity;
       }
     }
   }
@@ -950,5 +1147,28 @@ export function stepKinematicsRig(
 
     _matNextLocal.multiplyMatrices(_matInvParent, rec.currentCompMatrix);
     _matNextLocal.decompose(rec.obj.position, rec.obj.quaternion, rec.obj.scale);
+  }
+
+  // Publish exact Component-Space suction pad bottom-center pose for 60–144Hz Vacuum Pick & Transfer
+  for (let i = 0; i < rig.activeRuntimes.length; i++) {
+    const rt = rig.activeRuntimes[i];
+    if (rt.kind !== 'VacuumGripper') continue;
+    const rec = rt.nodeRecord;
+    const bounds = rec.restBoundsComp;
+
+    _vecDisp.set(bounds.center[0], bounds.min[1], bounds.center[2]);
+    _vecDisp.applyMatrix4(rec.deltaTotalComp);
+
+    _matRot.extractRotation(rec.deltaTotalComp);
+    _quatRot.setFromRotationMatrix(_matRot);
+
+    rt.poseEntry.padBottomComp[0] = _vecDisp.x;
+    rt.poseEntry.padBottomComp[1] = _vecDisp.y;
+    rt.poseEntry.padBottomComp[2] = _vecDisp.z;
+    rt.poseEntry.quatComp[0] = _quatRot.x;
+    rt.poseEntry.quatComp[1] = _quatRot.y;
+    rt.poseEntry.quatComp[2] = _quatRot.z;
+    rt.poseEntry.quatComp[3] = _quatRot.w;
+    rt.poseEntry.restBottomYComp = bounds.min[1];
   }
 }

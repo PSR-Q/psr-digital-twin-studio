@@ -52,13 +52,15 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.4.4-part-feeder
-          name: "v0.4.4 — Part Feeder ON / OFF Power Controls + DO_FeedEnable PLC Tag (.exe)"
+          tag_name: v0.5.0-vacuum-gripper
+          name: "v0.5.0 — Vacuum Gripper Pick & Transfer + Dual-Lane OpenUSD Gantry (.exe)"
           body: |
-            ### v0.4.4 Deliverable — Standalone Windows `.exe` (`VC-Digital-Twin-Studio-0.4.4-Portable.exe`)
-            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.4.4-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
-            - **New in `v0.4.4` — Instant `Part Feeder` ON / OFF Controls & `DO_FeedEnable` PLC Tag:**
-              - **Toggle `Part Feeder` ON / OFF Anywhere (Without Losing Settings):** Switch automatic part feeding ON or OFF with 1 click from the **Top Toolbar (`Feeder: ON/OFF`)**, **Left Workpieces Dock (`Feeder ON/OFF`)**, **Scene Hierarchy (`Feed ON/OFF`)**, **Right Flow Inspector (`Auto Feed: ON/OFF` + `+1 Part`)**, **Force I/O Console (`Part Feeder · Auto Feed Run`)**, or by **clicking the 3D Feeder Portal Ring** directly on the conveyor!
-              - **PLC & Force I/O Signal (`DO_FeedEnable`):** Exposes `Part Feeder · Auto Feed Run` (`BOOL`, `PLC_TO_SIM`) alongside `Part Feeder · Trigger 1 Part` (`DO_SpawnTrigger`) so PLCs or manual forces can start/pause feeding deterministically.
-            - **Includes `v0.4.3` Calibrated Pop-Up Stopper Gate & OpenUSD Portal Heights, `v0.4.2` SketchUp White / Sky / Dark Viewport Themes, `v0.4.1` Workpiece Belt Drag-and-Drop, and Full Milestones 1–4 Suite.**
+            ### v0.5.0 Deliverable — Standalone Windows `.exe` (`VC-Digital-Twin-Studio-0.5.0-Portable.exe`)
+            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.5.0-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
+            - **New in `v0.5.0` — Vacuum Gripper Pick & Transfer System (`VacuumGripper` Role + Dual-Lane Gantry):**
+              - **Dual-Lane OpenUSD Cartesian Pick & Place Cell:** Upgraded `cartesian-gantry-cell.usdz` spans two parallel conveyor lanes (`Z = 0.00 m` Pass/Pick Lane + `Z = +0.80 m` Transfer/Place Lane) with a 4-cup suction manifold (`Vacuum_Gripper_Tool_Axis`) and `-150..+900 mm` servo traverse stroke.
+              - **1-Click `Auto Pick & Place` Sequencer + Full PLC I/O Control:** Exposes `DO_AutoCycle`, `DO_VacuumOn`, `AO_PlacePosMm`, `DI_PartPresent`, and `DI_PartGripped` — supporting both 1-click automatic 9-phase Pick & Transfer onto Lane 2 and manual PLC ladder/SFC control (`DO_Extend`, `DO_VacuumOn`, `AO_TargetPosMm`).
+              - **Compliant Contact Stop & 6-DOF Carry:** Downward cylinder stroke stops cleanly on top of any workpiece height or belt surface without 3D mesh clipping, carries boxes in 6-DOF mid-air, and hands off deterministically onto any target conveyor spline.
+              - **Component Builder `Gripper` Role:** Turn any imported `.glb` or `.usdz` robot/gantry end-effector into an active vacuum suction gripper in seconds.
+            - **Includes `v0.4.4` Part Feeder ON/OFF Controls, `v0.4.3` Calibrated Stopper Gate, `v0.4.2` SketchUp White / Dark Themes, `v0.4.1` Workpiece Drag & Drop, and Milestones 1–4 PLC Drivers.**
           files: release/*.exe

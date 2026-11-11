@@ -31,6 +31,7 @@ export type SubMeshRoleType =
   | 'LinearAxis'
   | 'RotaryAxis'
   | 'VisualEffect'
+  | 'VacuumGripper'
   | 'SnapPort';
 
 export interface PneumaticCylinderPreset {
@@ -121,11 +122,27 @@ export interface VisualEffectRole {
   behavior?: ProcessTankValvePreset;
 }
 
+export interface VacuumGripperRole {
+  role: 'VacuumGripper';
+  nodeName: string;
+  /** Optional kinematic parent sub-mesh node name (e.g. Vertical_Z_Mast_Axis) */
+  parentNodeName?: string;
+  /** Horizontal XY capture radius in millimeters (default 180 mm) */
+  grabRadiusMm: number;
+  /** Vertical Z capture tolerance in millimeters (default 45 mm) */
+  grabHeightToleranceMm: number;
+  /** Default traverse target position in millimeters for Auto Pick & Place (default 800 mm) */
+  placeTargetPosMm?: number;
+  /** Rest height of suction cup bottom in Component Space (meters) for headless FK fallback */
+  localBottomOffsetM?: number;
+}
+
 export type SubMeshRoleAssignment =
   | StaticMeshRole
   | LinearAxisRole
   | RotaryAxisRole
-  | VisualEffectRole;
+  | VisualEffectRole
+  | VacuumGripperRole;
 
 export type SnapPortRole = 'InputPort' | 'OutputPort' | 'Bidirectional';
 

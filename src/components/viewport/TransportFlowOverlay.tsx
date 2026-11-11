@@ -523,22 +523,29 @@ export const TransportFlowOverlay = memo(function TransportFlowOverlay() {
       }
 
       const item = activeItems[i];
-      const lut = transportRuntime.getWorldSampler(item.pathNodeId);
-      if (!lut) {
-        grp.visible = false;
-        continue;
-      }
-
-      sampleWorldPathPose(lut, item.distanceMm, _samplePos, _sampleQuat, _sampleTan);
-
       const lenM = Math.max(0.05, item.dimensionsMm[0] * 0.001);
       const widM = Math.max(0.05, item.dimensionsMm[1] * 0.001);
       const hgtM = Math.max(0.03, item.dimensionsMm[2] * 0.001);
 
-      grp.visible = true;
-      grp.position.set(_samplePos.x, _samplePos.y + hgtM * 0.5 + 0.004, _samplePos.z);
-      grp.quaternion.copy(_sampleQuat);
-      grp.scale.set(lenM, hgtM, widM);
+      if (item.worldPoseOverride) {
+        const [px, py, pz] = item.worldPoseOverride.position;
+        const [qx, qy, qz, qw] = item.worldPoseOverride.quaternion;
+        grp.visible = true;
+        grp.position.set(px, py, pz);
+        grp.quaternion.set(qx, qy, qz, qw);
+        grp.scale.set(lenM, hgtM, widM);
+      } else {
+        const lut = transportRuntime.getWorldSampler(item.pathNodeId);
+        if (!lut) {
+          grp.visible = false;
+          continue;
+        }
+        sampleWorldPathPose(lut, item.distanceMm, _samplePos, _sampleQuat, _sampleTan);
+        grp.visible = true;
+        grp.position.set(_samplePos.x, _samplePos.y + hgtM * 0.5 + 0.004, _samplePos.z);
+        grp.quaternion.copy(_sampleQuat);
+        grp.scale.set(lenM, hgtM, widM);
+      }
 
       const requestedShape: WorkpieceShapeType = item.shape ?? 'carton';
       let effectiveShape: WorkpieceShapeType = requestedShape;
@@ -603,7 +610,11 @@ export const TransportFlowOverlay = memo(function TransportFlowOverlay() {
           lastColorHexBySlot.current[i] = item.colorHex;
         }
 
-        if (item.isAccumulated) {
+        if (item.grippedByKey) {
+          matPair.band.color.setHex(0x10b981);
+          matPair.band.emissive.setHex(0x059669);
+          matPair.band.emissiveIntensity = 0.88;
+        } else if (item.isAccumulated) {
           matPair.band.color.setHex(0xf59e0b);
           matPair.band.emissive.setHex(0xd97706);
           matPair.band.emissiveIntensity = 0.78;
