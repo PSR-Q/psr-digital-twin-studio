@@ -64,12 +64,16 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
     proxyObj.updateMatrixWorld();
   }, [proxyObj, instance.transform]);
 
-  // Clean 12-edge CAD selection box (no diagonal triangle wireframe lines)
+  // Clean 12-edge CAD selection box (lifted 3mm above Y=0 floor to prevent grid line Z-fighting)
   const selectionBox = useMemo(() => {
-    const [sx, sy, sz] = component.boundingBox.size;
+    const [sx, , sz] = component.boundingBox.size;
     const [minX, minY, minZ] = component.boundingBox.min;
     const [maxX, maxY, maxZ] = component.boundingBox.max;
-    const boxGeom = new THREE.BoxGeometry(sx + 0.04, sy + 0.04, sz + 0.04);
+    const paddedMinY = minY >= -0.005 ? Math.max(0.004, minY) : minY - 0.02;
+    const paddedMaxY = maxY + 0.02;
+    const boxHeight = Math.max(0.02, paddedMaxY - paddedMinY);
+
+    const boxGeom = new THREE.BoxGeometry(sx + 0.04, boxHeight, sz + 0.04);
     const edgesGeometry = new THREE.EdgesGeometry(boxGeom);
     boxGeom.dispose();
 
@@ -77,7 +81,7 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
       edgesGeometry,
       center: [
         (minX + maxX) * 0.5,
-        (minY + maxY) * 0.5,
+        (paddedMinY + paddedMaxY) * 0.5,
         (minZ + maxZ) * 0.5,
       ] as [number, number, number],
     };

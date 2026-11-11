@@ -6,7 +6,7 @@ import {
 } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Upload } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import * as THREE from 'three';
 import { configureGlbRendererSupport } from '../../engine/glbAssetRegistry';
 import { runtimeBusClient } from '../../engine/runtimeBusClient';
@@ -16,6 +16,104 @@ import { SceneInstanceMesh } from './SceneInstanceMesh';
 import { SnapPortIndicators } from './SnapPortIndicators';
 
 const GROUND_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const GRID_PLANE_ARGS: [number, number] = [40, 40];
+
+/**
+ * Isolated & memoized Floor + Infinite Grid layer.
+ * Never re-renders when dragging 3D instances, eliminating geometry recreation flicker,
+ * and disables depthWrite on the shadow plane to eliminate Z-fighting during camera orbit.
+ */
+const SceneFloor = memo(function SceneFloor() {
+  const showGrid = useEditorStore((s) => s.scene.environment.showGrid);
+
+  return (
+    <group name="FactoryFloorGroup">
+      {/* Shadow-receiving plane with depthWrite=false so it never Z-fights with the Y=0 Grid */}
+      <mesh
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[0, -0.008, 0]}
+        renderOrder={-2}
+        receiveShadow
+      >
+        <planeGeometry args={[120, 120]} />
+        <shadowMaterial
+          transparent
+          opacity={0.28}
+          depthWrite={false}
+          polygonOffset
+          polygonOffsetFactor={4}
+          polygonOffsetUnits={4}
+        />
+      </mesh>
+
+      {/* Anti-aliased Infinite Engineering Metric Floor Grid */}
+      {showGrid && (
+        <Grid
+          args={GRID_PLANE_ARGS}
+          renderOrder={-1}
+          cellSize={0.5}
+          cellThickness={1.0}
+          cellColor="#1b2432"
+          sectionSize={2.0}
+          sectionThickness={1.35}
+          sectionColor="#2e3d52"
+          fadeDistance={32}
+          fadeStrength={2.2}
+          side={THREE.DoubleSide}
+          infiniteGrid
+        />
+      )}
+
+      {/* World Origin Triad Marker lifted 4mm above floor to prevent coplanar line Z-fighting */}
+      <axesHelper args={[0.45]} position={[0, 0.004, 0]} />
+    </group>
+  );
+});
+
+/**
+ * Isolated 3D Machine Instances layer so transform updates during Gizmo drag
+ * only reconcile SceneInstanceMesh items without re-rendering Canvas, Lights, or Grid.
+ */
+const SceneInstancesLayer = memo(function SceneInstancesLayer() {
+  const instances = useEditorStore((s) => s.scene.instances);
+  const library = useEditorStore((s) => s.scene.componentLibrary);
+
+  const catalogMap = useMemo(
+    () => new Map<string, ComponentDefinition>(library.map((c) => [c.id, c])),
+    [library]
+  );
+
+  return (
+    <>
+      {instances.map((inst) => {
+        const comp = catalogMap.get(inst.componentId);
+        if (!comp) return null;
+        return (
+          <SceneInstanceMesh
+            key={inst.id}
+            instance={inst}
+            component={comp}
+          />
+        );
+      })}
+    </>
+  );
+});
+
+const CameraOrbitController = memo(function CameraOrbitController() {
+  const isGizmoDragging = useEditorStore((s) => s.isGizmoDragging);
+  return (
+    <OrbitControls
+      makeDefault
+      enabled={!isGizmoDragging}
+      enableDamping
+      dampingFactor={0.08}
+      maxPolarAngle={Math.PI / 2 - 0.015}
+      minDistance={0.6}
+      maxDistance={60}
+    />
+  );
+});
 
 /**
  * Exposes a zero-overhead function to raycast screen pixel coordinates onto the Y=0 factory floor
@@ -66,26 +164,20 @@ export function ViewportCanvas() {
     ((clientX: number, clientY: number) => Vector3Tuple) | null
   >(null);
 
-  const instances = useEditorStore((s) => s.scene.instances);
-  const library = useEditorStore((s) => s.scene.componentLibrary);
-  const showGrid = useEditorStore((s) => s.scene.environment.showGrid);
-  const isGizmoDragging = useEditorStore((s) => s.isGizmoDragging);
   const selectInstance = useEditorStore((s) => s.selectInstance);
   const spawnInstance = useEditorStore((s) => s.spawnInstance);
   const importGlbBuffer = useEditorStore((s) => s.importGlbBuffer);
   const loadSceneFromJsonString = useEditorStore((s) => s.loadSceneFromJsonString);
   const setStatusMessage = useEditorStore((s) => s.setStatusMessage);
 
-  const catalogMap = useMemo(
-    () => new Map<string, ComponentDefinition>(library.map((c) => [c.id, c])),
-    [library]
+  const handleDragOver = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      if (!isDragOver) setIsDragOver(true);
+    },
+    [isDragOver]
   );
-
-  const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
-    if (!isDragOver) setIsDragOver(true);
-  }, [isDragOver]);
 
   const handleDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
     if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
@@ -144,15 +236,16 @@ export function ViewportCanvas() {
       <Canvas
         shadows
         dpr={[1, 2]}
-        camera={{ position: [4.6, 3.6, 5.4], fov: 44, near: 0.08, far: 300 }}
+        gl={{ antialias: true, powerPreference: 'high-performance' }}
+        camera={{ position: [4.6, 3.6, 5.4], fov: 44, near: 0.15, far: 160 }}
         onPointerMissed={(e) => {
           if (e.type === 'click') selectInstance(null);
         }}
       >
         <color attach="background" args={['#0c1017']} />
-        <fog attach="fog" args={['#0c1017', 28, 75]} />
+        <fog attach="fog" args={['#0c1017', 26, 68]} />
 
-        {/* Offline-safe 3-Point Industrial Studio Lighting (Zero external CDN dependencies) */}
+        {/* Offline-safe 3-Point Industrial Studio Lighting */}
         <ambientLight intensity={0.68} />
         <hemisphereLight args={['#cbd5e1', '#1e293b', 0.65]} />
         <directionalLight
@@ -161,6 +254,7 @@ export function ViewportCanvas() {
           castShadow
           shadow-mapSize-width={2048}
           shadow-mapSize-height={2048}
+          shadow-bias={-0.0002}
           shadow-camera-near={0.5}
           shadow-camera-far={45}
           shadow-camera-left={-12}
@@ -171,62 +265,10 @@ export function ViewportCanvas() {
         <directionalLight position={[-8, 6, -7]} intensity={0.52} color="#bae6fd" />
 
         <DropRaycasterBridge bridgeRef={raycastDropRef} />
-
-        {/* Shadow-receiving industrial concrete floor plane */}
-        <mesh
-          rotation={[-Math.PI / 2, 0, 0]}
-          position={[0, -0.002, 0]}
-          receiveShadow
-        >
-          <planeGeometry args={[120, 120]} />
-          <shadowMaterial transparent opacity={0.32} />
-        </mesh>
-
-        {/* Infinite Engineering Metric Floor Grid */}
-        {showGrid && (
-          <Grid
-            position={[0, 0, 0]}
-            args={[40, 40]}
-            cellSize={0.5}
-            cellThickness={0.6}
-            cellColor="#1e293b"
-            sectionSize={2.0}
-            sectionThickness={1.15}
-            sectionColor="#334155"
-            fadeDistance={42}
-            fadeStrength={1.2}
-            infiniteGrid
-          />
-        )}
-
-        {/* World Origin Triad Marker (0, 0, 0) */}
-        <axesHelper args={[0.45]} />
-
-        {/* Placed 3D .glb Machine Instances */}
-        {instances.map((inst) => {
-          const comp = catalogMap.get(inst.componentId);
-          if (!comp) return null;
-          return (
-            <SceneInstanceMesh
-              key={inst.id}
-              instance={inst}
-              component={comp}
-            />
-          );
-        })}
-
-        {/* Magnetic SnapPort Cones, Locked Collars & Live Docking Beacon */}
+        <SceneFloor />
+        <SceneInstancesLayer />
         <SnapPortIndicators />
-
-        <OrbitControls
-          makeDefault
-          enabled={!isGizmoDragging}
-          enableDamping
-          dampingFactor={0.08}
-          maxPolarAngle={Math.PI / 2 - 0.01}
-          minDistance={0.6}
-          maxDistance={65}
-        />
+        <CameraOrbitController />
 
         <GizmoHelper alignment="bottom-right" margin={[70, 70]}>
           <GizmoViewport
