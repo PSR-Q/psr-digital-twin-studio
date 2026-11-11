@@ -1,12 +1,14 @@
 import {
   Activity,
   Box,
+  ChevronDown,
   Download,
   FilePlus2,
   FolderOpen,
   Grid3x3,
   Magnet,
   Maximize2,
+  Moon,
   Move,
   Pause,
   Play,
@@ -15,11 +17,16 @@ import {
   Route,
   Save,
   Sparkles,
+  Sun,
   Table2,
   Zap,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { runtimeBusClient } from '../../engine/runtimeBusClient';
+import {
+  resolveViewportTheme,
+  VIEWPORT_THEME_PRESETS,
+} from '../../engine/viewportTheme';
 import type { PlcAdapterType, PlcConnectionState } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
 
@@ -60,6 +67,35 @@ export function TopToolbar() {
 
   const [scanMs, setScanMs] = useState<number>(10.0);
   const [connState, setConnState] = useState<PlcConnectionState>('CONNECTED');
+  const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number }>({
+    top: 44,
+    left: 520,
+  });
+  const themeMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const resolvedTheme = useMemo(() => resolveViewportTheme(env), [env]);
+
+  useEffect(() => {
+    if (!isThemeMenuOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (
+        themeMenuRef.current &&
+        !themeMenuRef.current.contains(e.target as Node)
+      ) {
+        setIsThemeMenuOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsThemeMenuOpen(false);
+    };
+    window.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isThemeMenuOpen]);
 
   // Lightweight 4Hz telemetry readout for toolbar badge (never re-renders 3D scene!)
   useEffect(() => {
@@ -254,6 +290,148 @@ export function TopToolbar() {
         >
           <Grid3x3 size={14} />
         </button>
+
+        <div className="vc-theme-menu-anchor" ref={themeMenuRef}>
+          <button
+            id="btn-viewport-theme-menu"
+            type="button"
+            className={`vc-tool-btn vc-theme-trigger-btn ${
+              isThemeMenuOpen ? 'active' : ''
+            }`}
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              setPopoverPos({
+                top: Math.round(rect.bottom + 6),
+                left: Math.max(
+                  12,
+                  Math.min(window.innerWidth - 296, Math.round(rect.left - 60))
+                ),
+              });
+              setIsThemeMenuOpen((prev) => !prev);
+            }}
+            title="Viewport & Floor Theme Settings (SketchUp White / Sky / Dark / Custom)"
+          >
+            {resolvedTheme.isLight ? (
+              <Sun size={13} className="vc-amber-text" />
+            ) : (
+              <Moon size={13} className="vc-cyan-text" />
+            )}
+            <span>Floor: {resolvedTheme.shortLabel}</span>
+            <ChevronDown size={11} />
+          </button>
+
+          {isThemeMenuOpen && (
+            <div
+              id="popover-viewport-theme"
+              className="vc-theme-popover"
+              style={{ top: popoverPos.top, left: popoverPos.left }}
+            >
+              <div className="vc-theme-popover-title">
+                <span>VIEWPORT & FLOOR THEME · ตั้งค่าสีพื้น 3D</span>
+              </div>
+
+              <div className="vc-theme-preset-grid">
+                {VIEWPORT_THEME_PRESETS.map((preset) => {
+                  const activeId = env.viewportTheme ?? 'sketchup-white';
+                  const isActive = activeId === preset.id;
+                  const skyCol =
+                    preset.id === 'custom'
+                      ? env.customBackgroundColor ?? '#ffffff'
+                      : preset.skySwatch;
+                  const flCol =
+                    preset.id === 'custom'
+                      ? env.customFloorColor ?? '#ffffff'
+                      : preset.floorSwatch;
+                  return (
+                    <button
+                      key={preset.id}
+                      id={`toolbar-theme-${preset.id}`}
+                      type="button"
+                      className={`vc-theme-option-btn ${isActive ? 'active' : ''}`}
+                      onClick={() => updateEnvironment({ viewportTheme: preset.id })}
+                      title={preset.description}
+                    >
+                      <span
+                        className="vc-theme-dual-swatch"
+                        style={{
+                          background: `linear-gradient(180deg, ${skyCol} 50%, ${flCol} 50%)`,
+                        }}
+                      />
+                      <span className="vc-theme-option-copy">
+                        <strong>{preset.label}</strong>
+                        <small>{preset.labelTh}</small>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="vc-custom-color-row">
+                <label className="vc-color-picker-field">
+                  <span>Sky / BG</span>
+                  <div className="vc-color-input-wrap">
+                    <input
+                      id="toolbar-custom-bg-color"
+                      type="color"
+                      value={env.customBackgroundColor ?? '#ffffff'}
+                      onChange={(e) =>
+                        updateEnvironment({
+                          viewportTheme: 'custom',
+                          customBackgroundColor: e.target.value,
+                        })
+                      }
+                    />
+                    <code>{env.customBackgroundColor ?? '#ffffff'}</code>
+                  </div>
+                </label>
+
+                <label className="vc-color-picker-field">
+                  <span>Floor</span>
+                  <div className="vc-color-input-wrap">
+                    <input
+                      id="toolbar-custom-floor-color"
+                      type="color"
+                      value={env.customFloorColor ?? '#ffffff'}
+                      onChange={(e) =>
+                        updateEnvironment({
+                          viewportTheme: 'custom',
+                          customFloorColor: e.target.value,
+                        })
+                      }
+                    />
+                    <code>{env.customFloorColor ?? '#ffffff'}</code>
+                  </div>
+                </label>
+              </div>
+
+              <div className="vc-theme-popover-toggles">
+                <label className="vc-toggle-row" htmlFor="chk-toolbar-show-grid">
+                  <span>Show Metric Floor Grid (เส้นตารางพื้น)</span>
+                  <input
+                    id="chk-toolbar-show-grid"
+                    type="checkbox"
+                    checked={env.showGrid}
+                    onChange={(e) =>
+                      updateEnvironment({ showGrid: e.target.checked })
+                    }
+                  />
+                </label>
+
+                <label className="vc-toggle-row" htmlFor="chk-toolbar-show-axes">
+                  <span>SketchUp RGB Axes (เส้นแกน X/Y/Z)</span>
+                  <input
+                    id="chk-toolbar-show-axes"
+                    type="checkbox"
+                    checked={env.showOriginAxes !== false}
+                    onChange={(e) =>
+                      updateEnvironment({ showOriginAxes: e.target.checked })
+                    }
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Simulation Playback, Tag Matrix & PLC Scan Telemetry */}

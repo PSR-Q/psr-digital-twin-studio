@@ -27,6 +27,10 @@ import {
   syncSceneTransportAndSignals,
 } from '../engine/transportGraphSync';
 import {
+  loadSavedViewportPrefs,
+  saveViewportPrefs,
+} from '../engine/viewportTheme';
+import {
   computeWorkpieceDimensionsFromComponent,
   getWorkpiecePresetById,
 } from '../engine/workpieceCatalog';
@@ -132,6 +136,10 @@ function worldPointToLocalInstanceSpace(
 
 function buildStarterDemoScene(): SceneSchema {
   const base = createEmptySceneSchema(structuredClone(BUILTIN_COMPONENT_CATALOG));
+  base.environment = {
+    ...base.environment,
+    ...loadSavedViewportPrefs(),
+  };
   base.metadata.name = 'Packaging, Stopper Queue & HSC Line Demo';
 
   // Precision-docked 5-stage inline transport line (Z = 0) + Process & OpenUSD Servo Cell (Z = -2.05)
@@ -1715,16 +1723,20 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
   },
 
   updateEnvironment: (patch) =>
-    set((state) => ({
-      isDirty: true,
-      scene: {
-        ...state.scene,
-        environment: {
-          ...state.scene.environment,
-          ...patch,
+    set((state) => {
+      const nextEnvironment: SceneEnvironmentConfig = {
+        ...state.scene.environment,
+        ...patch,
+      };
+      saveViewportPrefs(nextEnvironment);
+      return {
+        isDirty: true,
+        scene: {
+          ...state.scene,
+          environment: nextEnvironment,
         },
-      },
-    })),
+      };
+    }),
 
   renameScene: (name) =>
     set((state) => ({
@@ -1741,6 +1753,10 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
 
   newEmptyScene: () => {
     const empty = createEmptySceneSchema(structuredClone(BUILTIN_COMPONENT_CATALOG));
+    empty.environment = {
+      ...empty.environment,
+      ...loadSavedViewportPrefs(),
+    };
     transportRuntime.clearAllFlowItems(
       runtimeBusClient.bufferView,
       empty.transportGraph
@@ -1826,11 +1842,16 @@ export const useEditorStore = create<EditorStoreState>((set, get) => ({
       );
       runtimeBusClient.syncTagMap(synced.plcTagMap);
 
+      const savedPrefs = loadSavedViewportPrefs();
       set({
         scene: {
           ...parsed,
           environment: {
             showTransportPaths: true,
+            showOriginAxes: savedPrefs.showOriginAxes ?? true,
+            viewportTheme: savedPrefs.viewportTheme ?? 'sketchup-white',
+            customBackgroundColor: savedPrefs.customBackgroundColor ?? '#ffffff',
+            customFloorColor: savedPrefs.customFloorColor ?? '#ffffff',
             ...parsed.environment,
           },
           componentLibrary: mergedLibrary,

@@ -6,11 +6,13 @@ import {
   Plus,
   Route,
   Sliders,
+  Sun,
   Trash2,
   Wrench,
   Zap,
 } from 'lucide-react';
 import { useMemo } from 'react';
+import { VIEWPORT_THEME_PRESETS } from '../../engine/viewportTheme';
 import type { SnapPortDefinition, Vector3Tuple } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
 import { ComponentBuilderPanel } from '../inspector/ComponentBuilderPanel';
@@ -30,6 +32,7 @@ const NORMAL_PRESETS: Array<{ label: string; vec: Vector3Tuple }> = [
 export function RightInspector() {
   const inspectorTab = useEditorStore((s) => s.inspectorTab);
   const setInspectorTab = useEditorStore((s) => s.setInspectorTab);
+  const selectInstance = useEditorStore((s) => s.selectInstance);
 
   const selectedInstanceId = useEditorStore((s) => s.selectedInstanceId);
   const instances = useEditorStore((s) => s.scene.instances);
@@ -121,6 +124,8 @@ export function RightInspector() {
     updateSnapPort(selectedComponent.id, port.id, { localPosition: nextPos });
   };
 
+  const activeViewportTheme = env.viewportTheme ?? 'sketchup-white';
+
   return (
     <aside id="vc-right-inspector" className="vc-right-dock">
       <div className="vc-pane-header">
@@ -130,20 +135,37 @@ export function RightInspector() {
             {selectedInstance ? 'INSPECTOR & BUILDER' : 'INSPECTOR · PLANT'}
           </span>
         </div>
-        {selectedComponent && (
-          <button
-            id="btn-export-vcomp"
-            type="button"
-            className="vc-mini-action-btn"
-            onClick={() =>
-              void exportComponentVcompInteractive(selectedComponent.id)
-            }
-            title="Export reusable .vcomp.json Component Definition"
-          >
-            <ExternalLink size={11} />
-            <span>.vcomp</span>
-          </button>
-        )}
+        <div className="vc-catalog-actions">
+          {selectedInstance && (
+            <button
+              id="btn-open-plant-settings"
+              type="button"
+              className="vc-mini-action-btn"
+              onClick={() => {
+                selectInstance(null);
+                setInspectorTab('transform');
+              }}
+              title="Open Plant & Floor Theme Settings"
+            >
+              <Sun size={11} />
+              <span>Floor</span>
+            </button>
+          )}
+          {selectedComponent && (
+            <button
+              id="btn-export-vcomp"
+              type="button"
+              className="vc-mini-action-btn"
+              onClick={() =>
+                void exportComponentVcompInteractive(selectedComponent.id)
+              }
+              title="Export reusable .vcomp.json Component Definition"
+            >
+              <ExternalLink size={11} />
+              <span>.vcomp</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 5-Mode Inspector Tabs (Always Accessible) */}
@@ -260,6 +282,111 @@ export function RightInspector() {
                 </div>
               </div>
             )}
+
+            {/* 3D VIEWPORT & FLOOR STYLE (SKETCHUP WHITE / SKY / DARK / CUSTOM) */}
+            <div className="vc-inspector-card">
+              <div className="vc-section-label">
+                <Sun size={12} className="vc-amber-text" />
+                <span>VIEWPORT & FLOOR THEME</span>
+              </div>
+
+              <div className="vc-theme-preset-grid">
+                {VIEWPORT_THEME_PRESETS.map((preset) => {
+                  const isActive = activeViewportTheme === preset.id;
+                  const skyCol =
+                    preset.id === 'custom'
+                      ? env.customBackgroundColor ?? '#ffffff'
+                      : preset.skySwatch;
+                  const flCol =
+                    preset.id === 'custom'
+                      ? env.customFloorColor ?? '#ffffff'
+                      : preset.floorSwatch;
+                  return (
+                    <button
+                      key={preset.id}
+                      id={`insp-theme-${preset.id}`}
+                      type="button"
+                      className={`vc-theme-option-btn ${isActive ? 'active' : ''}`}
+                      onClick={() => updateEnvironment({ viewportTheme: preset.id })}
+                      title={preset.description}
+                    >
+                      <span
+                        className="vc-theme-dual-swatch"
+                        style={{
+                          background: `linear-gradient(180deg, ${skyCol} 50%, ${flCol} 50%)`,
+                        }}
+                      />
+                      <span className="vc-theme-option-copy">
+                        <strong>{preset.label}</strong>
+                        <small>{preset.labelTh}</small>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {activeViewportTheme === 'custom' && (
+                <div className="vc-custom-color-row">
+                  <label className="vc-color-picker-field">
+                    <span>Sky / BG</span>
+                    <div className="vc-color-input-wrap">
+                      <input
+                        id="insp-custom-bg-color"
+                        type="color"
+                        value={env.customBackgroundColor ?? '#ffffff'}
+                        onChange={(e) =>
+                          updateEnvironment({
+                            viewportTheme: 'custom',
+                            customBackgroundColor: e.target.value,
+                          })
+                        }
+                      />
+                      <code>{env.customBackgroundColor ?? '#ffffff'}</code>
+                    </div>
+                  </label>
+
+                  <label className="vc-color-picker-field">
+                    <span>Floor</span>
+                    <div className="vc-color-input-wrap">
+                      <input
+                        id="insp-custom-floor-color"
+                        type="color"
+                        value={env.customFloorColor ?? '#ffffff'}
+                        onChange={(e) =>
+                          updateEnvironment({
+                            viewportTheme: 'custom',
+                            customFloorColor: e.target.value,
+                          })
+                        }
+                      />
+                      <code>{env.customFloorColor ?? '#ffffff'}</code>
+                    </div>
+                  </label>
+                </div>
+              )}
+
+              <label className="vc-toggle-row" htmlFor="chk-insp-show-grid">
+                <span>Show Metric Floor Grid</span>
+                <input
+                  id="chk-insp-show-grid"
+                  type="checkbox"
+                  checked={env.showGrid}
+                  onChange={(e) => updateEnvironment({ showGrid: e.target.checked })}
+                />
+              </label>
+
+              <label className="vc-toggle-row" htmlFor="chk-insp-show-axes">
+                <span>Show SketchUp RGB Origin Axes</span>
+                <input
+                  id="chk-insp-show-axes"
+                  type="checkbox"
+                  checked={env.showOriginAxes !== false}
+                  onChange={(e) =>
+                    updateEnvironment({ showOriginAxes: e.target.checked })
+                  }
+                />
+              </label>
+            </div>
 
             <div className="vc-inspector-card">
               <div className="vc-section-label">MAGNETIC SNAP ENGINE</div>

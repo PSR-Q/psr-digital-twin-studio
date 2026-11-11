@@ -16,11 +16,26 @@ export interface SceneMetadata {
   editorVersion: string;
 }
 
+export type ViewportThemeId =
+  | 'sketchup-white'
+  | 'sketchup-sky'
+  | 'cad-light-gray'
+  | 'dark-studio'
+  | 'custom';
+
 export interface SceneEnvironmentConfig {
   showGrid: boolean;
   showSnapPorts: boolean;
   /** Show 3D Spline Paths, Sensor Laser Beams, and Flow Portals */
   showTransportPaths?: boolean;
+  /** Show SketchUp-style extended RGB world origin axes on the floor */
+  showOriginAxes?: boolean;
+  /** 3D Viewport Floor & Sky Theme ('sketchup-white' | 'sketchup-sky' | 'cad-light-gray' | 'dark-studio' | 'custom') */
+  viewportTheme?: ViewportThemeId;
+  /** Custom sky/background hex color when viewportTheme === 'custom' */
+  customBackgroundColor?: string;
+  /** Custom floor ground plane hex color when viewportTheme === 'custom' */
+  customFloorColor?: string;
   snapEnabled: boolean;
   /** Magnetic port capture radius in meters */
   snapRadiusMeters: number;
@@ -83,6 +98,10 @@ export function createEmptySceneSchema(
       showGrid: true,
       showSnapPorts: true,
       showTransportPaths: true,
+      showOriginAxes: true,
+      viewportTheme: 'sketchup-white',
+      customBackgroundColor: '#ffffff',
+      customFloorColor: '#ffffff',
       snapEnabled: true,
       snapRadiusMeters: 0.45,
       autoAlignPortRotation: true,

@@ -2,6 +2,7 @@ import { Html } from '@react-three/drei';
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { computeInstanceWorldPorts } from '../../engine/snapEngine';
+import { resolveViewportTheme } from '../../engine/viewportTheme';
 import type {
   ComponentDefinition,
   SceneNodeInstance,
@@ -22,6 +23,16 @@ const UP_Y = new THREE.Vector3(0, 1, 0);
 
 export function SnapPortIndicators() {
   const showSnapPorts = useEditorStore((s) => s.scene.environment.showSnapPorts);
+  const viewportTheme = useEditorStore(
+    (s) => s.scene.environment.viewportTheme ?? 'sketchup-white'
+  );
+  const customFloorColor = useEditorStore(
+    (s) => s.scene.environment.customFloorColor ?? '#ffffff'
+  );
+  const inputPortColor = useMemo(
+    () => resolveViewportTheme({ viewportTheme, customFloorColor }).inputPortColor,
+    [viewportTheme, customFloorColor]
+  );
   const instances = useEditorStore((s) => s.scene.instances);
   const library = useEditorStore((s) => s.scene.componentLibrary);
   const snapConnections = useEditorStore((s) => s.scene.snapConnections);
@@ -90,10 +101,10 @@ export function SnapPortIndicators() {
         const color = item.isConnected
           ? '#10b981' // Emerald when magnetically mated
           : item.role === 'InputPort'
-            ? '#22d3ee' // Cyan for InputPort
+            ? inputPortColor // CAD Blue / Cyan for InputPort
             : item.role === 'OutputPort'
               ? '#f59e0b' // Industrial Amber for OutputPort
-              : '#38bdf8';
+              : '#0ea5e9';
 
         return (
           <group key={item.key} position={item.position} quaternion={item.quaternion}>

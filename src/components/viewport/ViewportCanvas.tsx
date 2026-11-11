@@ -14,6 +14,7 @@ import {
 } from '../../engine/glbAssetRegistry';
 import { runtimeBusClient } from '../../engine/runtimeBusClient';
 import { transportRuntime } from '../../engine/transportEngine';
+import { resolveViewportTheme } from '../../engine/viewportTheme';
 import type { ComponentDefinition, Vector3Tuple } from '../../shared/schemas';
 import { useEditorStore } from '../../store/editorStore';
 import { SceneInstanceMesh } from './SceneInstanceMesh';
@@ -24,26 +25,162 @@ const GROUND_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const GRID_PLANE_ARGS: [number, number] = [40, 40];
 
 /**
- * Isolated & memoized Floor + Infinite Grid layer.
+ * SketchUp-style extended World Origin RGB Axes:
+ * Solid positive rays (+X Red, +Y Green Up, +Z Blue) & dashed negative rays (-X, -Z),
+ * lifted 4mm with depthWrite=false so they never Z-fight or intercept pointer clicks.
+ */
+const SketchUpOriginAxes = memo(function SketchUpOriginAxes({
+  isLight,
+}: {
+  isLight: boolean;
+}) {
+  const axesGroup = useMemo(() => {
+    const group = new THREE.Group();
+    group.name = 'SketchUpOriginAxes';
+
+    const xColor = isLight ? '#dc2626' : '#ef4444';
+    const yColor = isLight ? '#16a34a' : '#22c55e';
+    const zColor = isLight ? '#2563eb' : '#3b82f6';
+    const solidOpacity = isLight ? 0.88 : 0.85;
+    const dashedOpacity = isLight ? 0.42 : 0.36;
+
+    const addSolidRay = (
+      from: [number, number, number],
+      to: [number, number, number],
+      color: string
+    ) => {
+      const geom = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(...from),
+        new THREE.Vector3(...to),
+      ]);
+      const mat = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: solidOpacity,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      const line = new THREE.Line(geom, mat);
+      line.renderOrder = 0;
+      line.raycast = () => {};
+      group.add(line);
+    };
+
+    const addDashedRay = (
+      from: [number, number, number],
+      to: [number, number, number],
+      color: string
+    ) => {
+      const geom = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(...from),
+        new THREE.Vector3(...to),
+      ]);
+      const mat = new THREE.LineDashedMaterial({
+        color,
+        dashSize: 0.14,
+        gapSize: 0.1,
+        transparent: true,
+        opacity: dashedOpacity,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      const line = new THREE.Line(geom, mat);
+      line.computeLineDistances();
+      line.renderOrder = 0;
+      line.raycast = () => {};
+      group.add(line);
+    };
+
+    const yLift = 0.004;
+    addSolidRay([0, yLift, 0], [22, yLift, 0], xColor);
+    addDashedRay([0, yLift, 0], [-22, yLift, 0], xColor);
+    addSolidRay([0, yLift, 0], [0, yLift, 22], zColor);
+    addDashedRay([0, yLift, 0], [0, yLift, -22], zColor);
+    addSolidRay([0, 0, 0], [0, 8, 0], yColor);
+
+    return group;
+  }, [isLight]);
+
+  useEffect(() => {
+    return () => {
+      axesGroup.traverse((obj) => {
+        if (obj instanceof THREE.Line) {
+          obj.geometry.dispose();
+          if (Array.isArray(obj.material)) {
+            obj.material.forEach((m) => m.dispose());
+          } else {
+            obj.material.dispose();
+          }
+        }
+      });
+    };
+  }, [axesGroup]);
+
+  return <primitive object={axesGroup} />;
+});
+
+/**
+ * Isolated & memoized Floor + Infinite Grid + SketchUp Origin Axes layer.
  * Never re-renders when dragging 3D instances, eliminating geometry recreation flicker,
- * and disables depthWrite on the shadow plane to eliminate Z-fighting during camera orbit.
+ * and disables depthWrite on the floor & shadow planes to eliminate Z-fighting during camera orbit.
  */
 const SceneFloor = memo(function SceneFloor() {
   const showGrid = useEditorStore((s) => s.scene.environment.showGrid);
+  const showOriginAxes = useEditorStore(
+    (s) => s.scene.environment.showOriginAxes !== false
+  );
+  const viewportTheme = useEditorStore(
+    (s) => s.scene.environment.viewportTheme ?? 'sketchup-white'
+  );
+  const customBg = useEditorStore(
+    (s) => s.scene.environment.customBackgroundColor ?? '#ffffff'
+  );
+  const customFloor = useEditorStore(
+    (s) => s.scene.environment.customFloorColor ?? '#ffffff'
+  );
+
+  const theme = useMemo(
+    () =>
+      resolveViewportTheme({
+        viewportTheme,
+        customBackgroundColor: customBg,
+        customFloorColor: customFloor,
+      }),
+    [viewportTheme, customBg, customFloor]
+  );
 
   return (
     <group name="FactoryFloorGroup">
+      {/* Horizon ground plane when Sky color differs from Ground color (e.g. SketchUp Sky + White Ground) */}
+      {theme.hasDistinctGroundPlane && (
+        <mesh
+          rotation={[-Math.PI / 2, 0, 0]}
+          position={[0, -0.016, 0]}
+          renderOrder={-3}
+          raycast={() => null}
+        >
+          <circleGeometry args={[180, 72]} />
+          <meshBasicMaterial
+            color={theme.floorColor}
+            depthWrite={false}
+            toneMapped={false}
+          />
+        </mesh>
+      )}
+
       {/* Shadow-receiving plane with depthWrite=false so it never Z-fights with the Y=0 Grid */}
       <mesh
         rotation={[-Math.PI / 2, 0, 0]}
         position={[0, -0.008, 0]}
         renderOrder={-2}
         receiveShadow
+        raycast={() => null}
       >
         <planeGeometry args={[120, 120]} />
         <shadowMaterial
+          color="#0f172a"
           transparent
-          opacity={0.28}
+          opacity={theme.shadowOpacity}
           depthWrite={false}
           polygonOffset
           polygonOffsetFactor={4}
@@ -58,19 +195,19 @@ const SceneFloor = memo(function SceneFloor() {
           renderOrder={-1}
           cellSize={0.5}
           cellThickness={1.0}
-          cellColor="#1b2432"
+          cellColor={theme.gridCellColor}
           sectionSize={2.0}
           sectionThickness={1.35}
-          sectionColor="#2e3d52"
-          fadeDistance={32}
-          fadeStrength={2.2}
+          sectionColor={theme.gridSectionColor}
+          fadeDistance={34}
+          fadeStrength={2.1}
           side={THREE.DoubleSide}
           infiniteGrid
         />
       )}
 
-      {/* World Origin Triad Marker lifted 4mm above floor to prevent coplanar line Z-fighting */}
-      <axesHelper args={[0.45]} position={[0, 0.004, 0]} />
+      {/* SketchUp-style Extended RGB Origin Axes */}
+      {showOriginAxes && <SketchUpOriginAxes isLight={theme.isLight} />}
     </group>
   );
 });
@@ -357,11 +494,32 @@ export function ViewportCanvas() {
 
   const isDrawingSplinePath = useEditorStore((s) => s.isDrawingSplinePath);
   const setIsDrawingSplinePath = useEditorStore((s) => s.setIsDrawingSplinePath);
+  const viewportTheme = useEditorStore(
+    (s) => s.scene.environment.viewportTheme ?? 'sketchup-white'
+  );
+  const customBg = useEditorStore(
+    (s) => s.scene.environment.customBackgroundColor ?? '#ffffff'
+  );
+  const customFloor = useEditorStore(
+    (s) => s.scene.environment.customFloorColor ?? '#ffffff'
+  );
+
+  const activeTheme = useMemo(
+    () =>
+      resolveViewportTheme({
+        viewportTheme,
+        customBackgroundColor: customBg,
+        customFloorColor: customFloor,
+      }),
+    [viewportTheme, customBg, customFloor]
+  );
 
   return (
     <div
       id="vc-3d-viewport-container"
       className="vc-viewport-wrapper"
+      data-viewport-light={activeTheme.isLight ? 'true' : 'false'}
+      style={{ backgroundColor: activeTheme.backgroundColor }}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -378,15 +536,24 @@ export function ViewportCanvas() {
           }
         }}
       >
-        <color attach="background" args={['#0c1017']} />
-        <fog attach="fog" args={['#0c1017', 26, 68]} />
+        <color attach="background" args={[activeTheme.backgroundColor]} />
+        <fog
+          attach="fog"
+          args={[activeTheme.fogColor, activeTheme.fogNear, activeTheme.fogFar]}
+        />
 
-        {/* Offline-safe 3-Point Industrial Studio Lighting */}
-        <ambientLight intensity={0.68} />
-        <hemisphereLight args={['#cbd5e1', '#1e293b', 0.65]} />
+        {/* Offline-safe 3-Point Studio Lighting calibrated for SketchUp Light & Industrial Dark */}
+        <ambientLight intensity={activeTheme.ambientIntensity} />
+        <hemisphereLight
+          args={[
+            activeTheme.hemiSkyColor,
+            activeTheme.hemiGroundColor,
+            activeTheme.hemiIntensity,
+          ]}
+        />
         <directionalLight
           position={[9, 14, 8]}
-          intensity={1.55}
+          intensity={activeTheme.keyLightIntensity}
           castShadow
           shadow-mapSize-width={2048}
           shadow-mapSize-height={2048}
@@ -398,7 +565,11 @@ export function ViewportCanvas() {
           shadow-camera-top={12}
           shadow-camera-bottom={-12}
         />
-        <directionalLight position={[-8, 6, -7]} intensity={0.52} color="#bae6fd" />
+        <directionalLight
+          position={[-8, 6, -7]}
+          intensity={activeTheme.fillLightIntensity}
+          color={activeTheme.fillLightColor}
+        />
 
         <DropRaycasterBridge bridgeRef={raycastDropRef} />
         <SceneFloor />
@@ -410,7 +581,7 @@ export function ViewportCanvas() {
         <GizmoHelper alignment="bottom-right" margin={[70, 70]}>
           <GizmoViewport
             axisColors={['#ef4444', '#22c55e', '#3b82f6']}
-            labelColor="#f8fafc"
+            labelColor="#ffffff"
           />
         </GizmoHelper>
       </Canvas>

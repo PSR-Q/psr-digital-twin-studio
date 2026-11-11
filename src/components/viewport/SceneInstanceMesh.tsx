@@ -15,6 +15,7 @@ import {
   quaternionToEulerDeg,
   solveMagneticSnap,
 } from '../../engine/snapEngine';
+import { resolveViewportTheme } from '../../engine/viewportTheme';
 import type {
   ComponentDefinition,
   SceneNodeInstance,
@@ -49,6 +50,17 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
     s.selectedInstanceId === instance.id ? s.selectedSubMeshName : null
   );
   const gizmoMode = useEditorStore((s) => s.gizmoMode);
+  const viewportTheme = useEditorStore(
+    (s) => s.scene.environment.viewportTheme ?? 'sketchup-white'
+  );
+  const customFloorColor = useEditorStore(
+    (s) => s.scene.environment.customFloorColor ?? '#ffffff'
+  );
+  const selectionOutlineColor = useMemo(
+    () =>
+      resolveViewportTheme({ viewportTheme, customFloorColor }).selectionWireframeColor,
+    [viewportTheme, customFloorColor]
+  );
   const selectInstance = useEditorStore((s) => s.selectInstance);
   const selectSubMesh = useEditorStore((s) => s.selectSubMesh);
   const setInspectorTab = useEditorStore((s) => s.setInspectorTab);
@@ -443,9 +455,9 @@ export function SceneInstanceMesh({ instance, component }: SceneInstanceMeshProp
             raycast={() => null}
           >
             <lineBasicMaterial
-              color={instance.locked ? '#f59e0b' : '#22d3ee'}
+              color={instance.locked ? '#f59e0b' : selectionOutlineColor}
               transparent
-              opacity={selectedSubMeshName ? 0.42 : 0.8}
+              opacity={selectedSubMeshName ? 0.45 : 0.85}
               toneMapped={false}
             />
           </lineSegments>

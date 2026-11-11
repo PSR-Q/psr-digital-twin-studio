@@ -52,14 +52,13 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.4.1-workpieces
-          name: "v0.4.1 — Industrial Workpiece Catalog + Direct 3D Belt Drag-and-Drop + Live PLC Drivers (.exe)"
+          tag_name: v0.4.2-sketchup-floor
+          name: "v0.4.2 — SketchUp White / Sky / Dark Viewport Floor Theme Settings + Workpieces (.exe)"
           body: |
-            ### v0.4.1 Deliverable — Standalone Windows `.exe` (`VC-Digital-Twin-Studio-0.4.1-Portable.exe`)
-            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.4.1-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
-            - **New in `v0.4.1` — Industrial Workpiece Catalog & Direct 3D Conveyor Belt Drag-and-Drop:**
-              - **5 Built-in Test Workpieces:** **Carton Box (กล่องพัสดุ)**, **Industrial Pallet (พาเลทสินค้า)**, **KLT Tote Bin (ลังพลาสติก)**, **Cylinder / Canister (ทรงกระบอก/ขวด)**, and **CNC Metal Billet (แผ่นโลหะสำหรับทดสอบ Inductive Proximity Sensor)**.
-              - **Zero-Parallax 3D Belt Spline Snapping & Ghost Preview:** Drag any workpiece from the Left Dock and drop it at *any* millimeter along any elevated/curved conveyor spline (`STOPPED`, `PAUSED`, or `RUNNING`) — immediately triggers `Photoelectric` / `Proximity` sensors (`SIM_TO_PLC BOOL`) and queues cleanly without overlapping!
-              - **Custom `.GLB` / `OpenUSD` CAD Workpieces:** Use any imported `.glb`, `.gltf`, `.usd`, `.usda`, `.usdc`, or `.usdz` 3D CAD model as a moving product on conveyor belts or continuous `PartSource` feeders.
-            - **Includes Full Milestones 1–4 Suite:** glTF/OpenUSD Importer, Component Axis Builder & Force I/O, Spline Accumulation & HSC `DINT`/`REAL` Encoders, and Live `UtilityProcess` PLC Drivers (**Siemens S7-PLCSIM Adv**, **Mitsubishi MELSEC 3E GX Sim3**, **OPC UA**, + **Full I/O Tag Matrix**).
+            ### v0.4.2 Deliverable — Standalone Windows `.exe` (`VC-Digital-Twin-Studio-0.4.2-Portable.exe`)
+            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.4.2-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
+            - **New in `v0.4.2` — SketchUp White Floor & Configurable 3D Viewport Theme Settings:**
+              - **5 Built-in 3D Viewport & Floor Presets:** **SketchUp White (พื้นขาวคลีน)**, **SketchUp Sky & Ground (ท้องฟ้า + พื้นขาว)**, **CAD Light Gray (พื้นเทาสว่าง)**, **Dark Industrial (พื้นมืดเดิม)**, plus **Custom Sky & Floor Color Pickers**.
+              - **SketchUp-Style Extended RGB Origin Axes & Zero-Flicker Floor Grid:** Solid positive `+X` (Red), `+Y` (Green Up), `+Z` (Blue) & dashed negative rays with toggleable Metric Grid in both Top Toolbar (`Floor: White`) and Right Inspector (`VIEWPORT & FLOOR THEME`).
+            - **Includes `v0.4.1` Workpiece Catalog & Direct 3D Belt Drag-and-Drop + Full Milestones 1–4 Suite** (glTF/OpenUSD Importer, Component Axis Builder & Force I/O, Spline Accumulation & HSC Encoders, and Live `UtilityProcess` PLC Drivers for Siemens S7, Mitsubishi MELSEC 3E, and OPC UA).
           files: release/*.exe
