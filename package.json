@@ -1,0 +1,45 @@
+{
+  "name": "vc-digital-twin-studio",
+  "version": "0.1.0",
+  "description": "Standalone 3D Industrial Digital Twin & Virtual Commissioning Desktop Tool",
+  "author": "VC Digital Twin Studio",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "generate:glbs": "node scripts/generateSampleGlbs.mjs",
+    "typecheck": "tsc -b",
+    "build:renderer": "vite build",
+    "build:electron": "node scripts/buildElectron.mjs",
+    "build": "npm run typecheck && npm run build:renderer && npm run build:electron",
+    "build:all": "npm run generate:glbs && npm run build",
+    "dist:win": "npm run build:all && electron-builder --win portable --x64 --publish never",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.2",
+    "@types/three": "^0.187.0",
+    "lucide-react": "^1.71.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "three": "^0.187.0",
+    "zustand": "^5.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "^45.3.0",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "oxlint": "^1.90.0",
+    "tailwindcss": "^4.3.5",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.6"
+  }
+}

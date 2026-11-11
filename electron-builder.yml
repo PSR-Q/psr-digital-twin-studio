@@ -1,0 +1,18 @@
+appId: com.vctwin.digitaltwinstudio
+productName: VC Digital Twin Studio
+directories:
+  output: release
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+  - "!node_modules/**/*"
+asar: true
+npmRebuild: false
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+portable:
+  artifactName: VC-Digital-Twin-Studio-${version}-Portable.exe

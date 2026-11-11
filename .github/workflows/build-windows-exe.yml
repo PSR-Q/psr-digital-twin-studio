@@ -1,0 +1,62 @@
+name: Build Standalone Windows EXE
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Package Windows Portable .exe
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate sample industrial .glb models
+        run: npm run generate:glbs
+
+      - name: Verify strict TypeScript schemas & build Renderer + Electron Worker
+        run: npm run build:all
+
+      - name: Package single standalone Windows .exe via electron-builder
+        run: npx electron-builder --win portable --x64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Upload Windows .exe Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VC-Digital-Twin-Studio-Windows-Portable-EXE
+          path: release/*.exe
+          if-no-files-found: error
+
+      - name: Publish Standalone .exe to GitHub Releases
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.0-milestone1
+          name: "Milestone 1 — Standalone 3D Editor & SnapPort Engine (.exe)"
+          body: |
+            ### Milestone 1 Deliverable — Standalone Windows `.exe`
+            - **Zero-install Portable Executable:** Download `VC-Digital-Twin-Studio-0.1.0-Portable.exe` below and double-click to launch on Windows 10/11 (x64).
+            - **Included Features:**
+              1. Electron + React 19 + R3F 3D CAD Workbench + UtilityProcess Cyclic Bus
+              2. Drag-and-drop `.glb` / `.gltf` loader with automatic bounding-box `SnapPort` generation + built-in industrial `.glb` catalog
+              3. Decoupled `TransformControls` Gizmo (`Move / Rotate / Scale`) with magnetic `InputPort <-> OutputPort` alignment & docking
+              4. Self-contained Scene `.json` Save/Load & `.vcomp.json` Component export
+          files: release/*.exe

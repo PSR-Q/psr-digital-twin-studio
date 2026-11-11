@@ -1,0 +1,13 @@
+# Dependencies
+node_modules
+
+# Build outputs
+dist
+dist-electron
+release
+*.local
+*.tsbuildinfo
+
+# Editor / OS
+.DS_Store
+Thumbs.db
