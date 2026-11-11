@@ -116,6 +116,7 @@ export function SnapPortIndicators() {
               <Html
                 position={[0, 0.13, 0]}
                 center
+                zIndexRange={[20, 0]}
                 style={{ pointerEvents: 'none' }}
               >
                 <div className="vc-port-tag" data-connected={item.isConnected ? 'true' : 'false'}>
@@ -143,7 +144,12 @@ export function SnapPortIndicators() {
             <sphereGeometry args={[0.042, 16, 16]} />
             <meshBasicMaterial color="#34d399" toneMapped={false} />
           </mesh>
-          <Html position={[0, 0.24, 0]} center style={{ pointerEvents: 'none' }}>
+          <Html
+            position={[0, 0.24, 0]}
+            center
+            zIndexRange={[25, 0]}
+            style={{ pointerEvents: 'none' }}
+          >
             <div className="vc-snap-beacon-badge">
               MAGNETIC SNAP · {activeSnapPreview.sourcePort?.name} ⇄{' '}
               {activeSnapPreview.targetPort?.name}
